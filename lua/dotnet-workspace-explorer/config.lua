@@ -23,7 +23,7 @@ local function defaults()
 		glyphs = {
 			closed = ">",
 			open = "v",
-			leaf = "-",
+			leaf = " ",
 			solution = "S",
 			project = "P",
 			folder = "D",

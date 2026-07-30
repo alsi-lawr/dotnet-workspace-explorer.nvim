@@ -12,14 +12,14 @@ local links = {
 	File = "Normal",
 }
 local kinds = {
-	workspace = { glyph = "solution", group = "Solution" },
+	workspace = { glyph = "solution", group = "Solution", devicon = "workspace.slnx" },
 	solutionFolder = { glyph = "folder", group = "Folder" },
-	project = { glyph = "project", group = "Project" },
+	project = { glyph = "project", group = "Project", devicon = "project.csproj" },
 	projectFolder = { glyph = "folder", group = "Folder" },
 	dependencyContainer = { glyph = "folder", group = "DependencyContainer" },
-	dependency = { glyph = "file", group = "Dependency" },
-	solutionItem = { glyph = "file", group = "File", file = true },
-	projectFile = { glyph = "file", group = "File", file = true },
+	dependency = { glyph = "file", group = "Dependency", devicon = "dependency.dll" },
+	solutionItem = { glyph = "file", group = "File" },
+	projectFile = { glyph = "file", group = "File" },
 }
 local function valid(kind, id)
 	return id and vim.api["nvim_" .. kind .. "_is_valid"](id)
@@ -48,7 +48,7 @@ local function write(lines, rows)
 	end
 end
 
-local function file_icon(name, fallback)
+local function presentation_icon(node, kind, fallback, expanded)
 	if not config.get().presentation.devicons then
 		return fallback
 	end
@@ -56,7 +56,14 @@ local function file_icon(name, fallback)
 	if not loaded or type(devicons.get_icon) ~= "function" then
 		return fallback
 	end
-	local found, icon, group = pcall(devicons.get_icon, name, nil, { default = false })
+	local fixed = (node.kind:find("Folder$") and (expanded and "" or ""))
+		or (node.kind == "dependencyContainer" and "")
+		or (node.kind == "dependency" and node.name:match(" %([^()]+%)$") and "")
+	if fixed then
+		return fixed
+	end
+	local found, icon, group =
+		pcall(devicons.get_icon, kind.devicon or node.name, nil, { default = false })
 	if found and type(icon) == "string" and icon ~= "" and type(group) == "string" then
 		return icon, group
 	end
@@ -82,7 +89,7 @@ function M.open()
 		M.win = vim.api.nvim_get_current_win()
 		vim.api.nvim_win_set_buf(M.win, M.buf)
 		vim.api.nvim_win_set_width(M.win, options.width)
-		vim.wo[M.win].cursorline = true
+		vim.wo[M.win].cursorline, vim.wo[M.win].wrap = true, false
 		vim.api.nvim_set_current_win(current)
 	end
 end
@@ -175,10 +182,7 @@ function M.render(tree)
 		local node, expandable = tree:get_node(id), tree:is_expandable(id)
 		local mark = expandable and (tree.expanded[id] and glyphs.open or glyphs.closed) or glyphs.leaf
 		local kind = kinds[node.kind] or kinds.projectFile
-		local icon, icon_group = glyphs[kind.glyph], nil
-		if kind.file then
-			icon, icon_group = file_icon(node.name, icon)
-		end
+		local icon, icon_group = presentation_icon(node, kind, glyphs[kind.glyph], tree.expanded[id])
 		local indent, name = ("  "):rep(depth), node.name:gsub("[\r\n]+[ \t]*", "\t")
 		local disclosure_start = #indent
 		local icon_start = disclosure_start + #mark + 1

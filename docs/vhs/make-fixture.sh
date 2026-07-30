@@ -2,7 +2,7 @@
 set -euo pipefail
 
 root=$(git rev-parse --show-toplevel)
-scratch=${DWE_SCRATCH_ROOT:-"$root/.agent-workspace/DWE-008"}
+scratch=${DWE_SCRATCH_ROOT:-"$root/.agent-workspace/visual"}
 fixture="$scratch/fixture"
 
 case "$fixture" in

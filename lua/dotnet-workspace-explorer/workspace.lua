@@ -313,6 +313,10 @@ function Workspace:is_expandable(id)
 		and (node.kind == "workspace" or node.kind == "solutionFolder" or node.kind == "project")
 end
 
+function Workspace:is_terminal()
+	return self.client.inert or self.client.state == "failed"
+end
+
 function Workspace:request(method, parameters, callback)
 	return self.client:request(method, parameters, callback)
 end

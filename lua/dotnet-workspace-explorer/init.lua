@@ -3,32 +3,35 @@ local view = require("dotnet-workspace-explorer.view")
 local Workspace = require("dotnet-workspace-explorer.workspace").Workspace
 
 local M = {}
-local tree, target, initial_failed
+local tree, target, initial_failed, terminal_failed, has_good
 local function fail(err)
 	if err then
 		view.failure(err)
 	end
 end
 
-local function start(resolved)
+local function start(resolved, retain_tree)
 	if tree then
 		tree:stop("session_replaced", true)
 	end
-	target, initial_failed = resolved, false
-	view.loading()
+	target, initial_failed, terminal_failed = resolved, false, false
+	if not retain_tree then
+		has_good = false
+		view.loading()
+	end
 	local current, loaded
 	current = Workspace.new({
 		command = config.get().command,
 		target = target,
 		on_change = function(state)
 			if current == tree then
-				loaded, initial_failed = true, false
+				loaded, initial_failed, terminal_failed, has_good = true, false, false, true
 				view.render(state)
 			end
 		end,
 		on_error = function(err)
 			if current == tree then
-				initial_failed = not loaded
+				initial_failed, terminal_failed = not loaded, current:is_terminal()
 				fail(err)
 			end
 		end,
@@ -36,7 +39,7 @@ local function start(resolved)
 	tree = current
 	tree:start(function(err)
 		if err and current == tree then
-			initial_failed = not loaded
+			initial_failed, terminal_failed = not loaded, current:is_terminal()
 			fail(err)
 		end
 	end)
@@ -55,7 +58,7 @@ function M.open(requested)
 	end
 	view.open()
 	if tree and target == resolved then
-		if not initial_failed then
+		if not initial_failed and not terminal_failed then
 			view.render(tree)
 		end
 		return
@@ -68,7 +71,7 @@ function M.close()
 	if tree then
 		tree:stop("explorer_closed")
 	end
-	tree, target, initial_failed = nil, nil, nil
+	tree, target, initial_failed, terminal_failed, has_good = nil, nil, nil, nil, nil
 end
 
 function M.toggle(requested)
@@ -87,8 +90,8 @@ function M.refresh()
 	if not tree then
 		return view.failure({ message = "Open the workspace explorer before refreshing." })
 	end
-	if initial_failed then
-		return start(target)
+	if initial_failed or terminal_failed then
+		return start(target, has_good)
 	end
 	view.selected(tree)
 	tree:refresh(fail)

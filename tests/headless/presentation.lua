@@ -77,7 +77,14 @@ package.preload["nvim-web-devicons"] = function()
 	return {
 		get_icon = function(name, extension, options)
 			lookups[#lookups + 1] = { name, extension, options }
-			return "", "DevIconFsharp"
+			local icons = {
+				["workspace.slnx"] = { "", "DevIconSlnx" },
+				["project.csproj"] = { "󰪮", "DevIconCSharpProject" },
+				["README.md"] = { "", "DevIconMd" },
+				["Multi\r\n\tName.fs"] = { "", "DevIconFsharp" },
+				["dependency.dll"] = { "", "DevIconDll" },
+			}
+			return unpack(icons[name] or {})
 		end,
 	}
 end
@@ -88,6 +95,7 @@ end
 
 vim.api.nvim_set_hl(0, "DotnetWorkspaceExplorerFile", { link = "Error" })
 view.open()
+assert_equal(false, vim.wo[view.win].wrap, "explorer rows do not wrap")
 assert_equal(
 	"Error",
 	vim.api.nvim_get_hl(0, {
@@ -126,8 +134,18 @@ end
 view.render(tree)
 lines = vim.api.nvim_buf_get_lines(view.buf, 0, -1, false)
 assert_equal(1, loads, "enabled Devicons loads lazily")
-assert_equal({ "README.md", nil, { default = false } }, lookups[1], "solution item lookup")
-assert_equal({ "Multi\r\n\tName.fs", nil, { default = false } }, lookups[2], "project file lookup")
+assert_equal({ "workspace.slnx", nil, { default = false } }, lookups[1], "solution lookup")
+assert_equal({ "README.md", nil, { default = false } }, lookups[2], "solution item lookup")
+assert_equal({ "project.csproj", nil, { default = false } }, lookups[3], "project lookup")
+assert_equal({ "Multi\r\n\tName.fs", nil, { default = false } }, lookups[4], "project file lookup")
+assert(lines[1]:find(" Example.slnx", 1, true), "solution Devicon")
+assert(lines[2]:find(" Source", 1, true), "open directory icon")
+assert(lines[3]:find(" README.md", 1, true), "solution item Devicon")
+assert(lines[4]:find("󰪮 Example.fsproj", 1, true), "project Devicon")
+assert(lines[5]:find(" Features", 1, true), "open project directory icon")
+assert(lines[7]:find(" Dependencies", 1, true), "dependency container icon")
+assert(lines[8]:find(" FSharp.Core (10.0.0)", 1, true), "NuGet Devicon")
+assert(not lines[6]:find("- ", 1, true), "file row omits the leaf prefix")
 
 local icon_range
 for _, item in ipairs(highlights) do
@@ -136,8 +154,8 @@ for _, item in ipairs(highlights) do
 	end
 end
 assert(icon_range, "project file Devicon highlight")
-assert_equal(#"", icon_range[4] - icon_range[3], "Devicon byte range length")
-assert_equal("", lines[6]:sub(icon_range[3] + 1, icon_range[4]), "Devicon byte range contents")
+assert_equal(#"", icon_range[4] - icon_range[3], "Devicon byte range length")
+assert_equal("", lines[6]:sub(icon_range[3] + 1, icon_range[4]), "Devicon byte range contents")
 
 for _, fallback in ipairs({
 	function()
@@ -160,6 +178,10 @@ end
 view.render(tree)
 lines = vim.api.nvim_buf_get_lines(view.buf, 0, -1, false)
 assert(lines[6]:find(" F Multi\tName.fs", 1, true), "missing module uses file glyph")
+assert(lines[1]:find(" S Example.slnx", 1, true), "missing module uses solution glyph")
+assert(lines[2]:find(" D Source", 1, true), "missing module uses folder glyph")
+assert(lines[4]:find(" P Example.fsproj", 1, true), "missing module uses project glyph")
+assert(lines[8]:find(" F FSharp.Core (10.0.0)", 1, true), "missing module uses dependency glyph")
 assert_equal(0, notifications, "fallbacks stay silent")
 
 vim.api.nvim_buf_add_highlight = add_highlight

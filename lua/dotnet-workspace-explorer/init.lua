@@ -171,12 +171,7 @@ local function project_for(id)
 	while id do
 		local node = tree:get_node(id)
 		if node and node.kind == "project" then
-			for _, capability in ipairs(node.capabilities) do
-				if capability == "workspace.write" then
-					return id
-				end
-			end
-			return nil
+			return id
 		end
 		id = tree:parent(id)
 	end
@@ -191,7 +186,7 @@ local function create_file(path)
 	end
 	local session, project = tree, project_for(view.selected(tree))
 	if not project then
-		return fail({ message = "Select a writable project before adding a file." })
+		return fail({ message = "Select a project before adding a file." })
 	end
 	for _, capability in ipairs({
 		"workspace.commands.describe",

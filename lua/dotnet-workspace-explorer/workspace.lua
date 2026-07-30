@@ -297,6 +297,12 @@ function Workspace:children_of(id)
 	return self.children[id]
 end
 
+function Workspace:is_expandable(id)
+	local node = self.nodes[id]
+	return node
+		and (node.kind == "workspace" or node.kind == "solutionFolder" or node.kind == "project")
+end
+
 function Workspace:request(method, parameters, callback)
 	return self.client:request(method, parameters, callback)
 end

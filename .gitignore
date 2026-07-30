@@ -1,0 +1,4 @@
+.agent-workspace/
+.direnv/
+result
+result-*

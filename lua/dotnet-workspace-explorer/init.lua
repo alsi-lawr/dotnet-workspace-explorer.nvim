@@ -47,6 +47,7 @@ end
 
 function M.setup(options)
 	config.setup(options)
+	view.mappings(M)
 end
 
 function M.open(requested)
@@ -57,6 +58,7 @@ function M.open(requested)
 		return view.failure({ message = ok and "The workspace target is invalid." or resolved })
 	end
 	view.open()
+	view.mappings(M)
 	if tree and target == resolved then
 		if not initial_failed and not terminal_failed then
 			view.render(tree)
@@ -124,6 +126,150 @@ function M.activate()
 		else
 			tree:expand(id, fail)
 		end
+	end)
+end
+
+local command_id = "project.item.new"
+local function compatible_descriptor(result)
+	local descriptor = type(result) == "table" and result.command
+	if
+		type(descriptor) ~= "table"
+		or descriptor.id ~= command_id
+		or descriptor.access ~= "write"
+		or type(descriptor.parameters) ~= "table"
+		or not vim.islist(descriptor.parameters)
+		or type(descriptor.targetKinds) ~= "table"
+		or not vim.islist(descriptor.targetKinds)
+	then
+		return
+	end
+	local required, targets = {}, {}
+	for _, parameter in ipairs(descriptor.parameters) do
+		if
+			type(parameter) ~= "table"
+			or type(parameter.id) ~= "string"
+			or type(parameter.type) ~= "string"
+			or type(parameter.required) ~= "boolean"
+		then
+			return
+		end
+		if parameter.required then
+			required[parameter.id] = parameter.type
+		end
+	end
+	for _, kind in ipairs(descriptor.targetKinds) do
+		targets[kind] = true
+	end
+	return targets.project
+		and required.path == "path"
+		and required.itemType == "choice"
+		and vim.tbl_count(required) == 2
+		and descriptor
+end
+
+local function project_for(id)
+	while id do
+		local node = tree:get_node(id)
+		if node and node.kind == "project" then
+			for _, capability in ipairs(node.capabilities) do
+				if capability == "workspace.write" then
+					return id
+				end
+			end
+			return nil
+		end
+		id = tree:parent(id)
+	end
+end
+
+local function create_file(path)
+	if type(path) ~= "string" or path == "" then
+		return
+	end
+	if not tree then
+		return fail({ message = "Open the workspace explorer before adding a file." })
+	end
+	local session, project = tree, project_for(view.selected(tree))
+	if not project then
+		return fail({ message = "Select a writable project before adding a file." })
+	end
+	for _, capability in ipairs({
+		"workspace.commands.describe",
+		"workspace.commands.preview",
+		"workspace.commands.execute",
+	}) do
+		if not session:has_capability(capability) then
+			return fail({ message = "The workspace does not support adding project items." })
+		end
+	end
+	session:request("workspace/commands/describe", {
+		commandId = command_id,
+		targetNodeId = project,
+	}, function(describe_error, result)
+		if describe_error then
+			return fail(describe_error)
+		end
+		local descriptor = compatible_descriptor(result)
+		if not descriptor then
+			return fail({ message = "The add-file command descriptor is incompatible." })
+		end
+		local captured = {
+			descriptor = descriptor,
+			request = {
+				commandId = command_id,
+				targetNodeId = project,
+				arguments = {
+					path = path,
+					itemType = config.get().actions.add_file.item_type,
+				},
+				expectedRevision = session.revision,
+			},
+		}
+		session:request("workspace/commands/preview", captured.request, function(preview_error, preview)
+			if preview_error then
+				return fail(preview_error)
+			end
+			local token = type(preview) == "table" and preview.confirmationToken
+			if type(token) ~= "string" or token == "" then
+				return fail({ message = "The add-file preview is incompatible." })
+			end
+			vim.ui.select({ "Create", "Cancel" }, { prompt = "Create " .. path .. "?" }, function(choice)
+				if choice ~= "Create" then
+					return
+				end
+				local execute = vim.deepcopy(captured.request)
+				execute.confirmationToken = token
+				session:request("workspace/commands/execute", execute, function(execute_error, applied)
+					if execute_error then
+						return fail(execute_error)
+					end
+					if
+						type(applied) ~= "table"
+						or applied.applied ~= true
+						or type(applied.revision) ~= "number"
+						or applied.revision < 0
+						or applied.revision % 1 ~= 0
+					then
+						return fail({ message = "The add-file result is incompatible." })
+					end
+					if session == tree then
+						M.refresh()
+					end
+				end)
+			end)
+		end)
+	end)
+end
+
+function M.add_file(path)
+	if not tree then
+		return fail({ message = "Open the workspace explorer before adding a file." })
+	end
+	if path ~= nil then
+		return create_file(path)
+	end
+	vim.ui.input({ prompt = "Solution-relative or absolute path: " }, function(value)
+		create_file(value)
 	end)
 end
 

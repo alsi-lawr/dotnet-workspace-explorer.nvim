@@ -1,6 +1,6 @@
 local config = require("dotnet-workspace-explorer.config")
 
-local M = { rows = {} }
+local M = { rows = {}, owned_mappings = {} }
 local ns = vim.api.nvim_create_namespace("dotnet-workspace-explorer")
 local function valid(kind, id)
 	return id and vim.api["nvim_" .. kind .. "_is_valid"](id)
@@ -52,6 +52,49 @@ end
 
 function M.is_open()
 	return valid("win", M.win)
+end
+
+local function local_mapping(lhs)
+	local raw = vim.keycode(lhs)
+	for _, mapping in ipairs(vim.api.nvim_buf_get_keymap(M.buf, "n")) do
+		if mapping.lhsraw == raw then
+			return mapping
+		end
+	end
+end
+
+function M.mappings(actions)
+	if not valid("buf", M.buf) then
+		return
+	end
+	local blocked = {}
+	for lhs, callback in pairs(M.owned_mappings) do
+		local mapping = local_mapping(lhs)
+		if mapping and mapping.callback == callback then
+			vim.keymap.del("n", lhs, { buffer = M.buf })
+		elseif mapping then
+			blocked[lhs] = true
+		end
+	end
+	M.owned_mappings = {}
+	local configured = config.get().mappings
+	if configured == false then
+		return
+	end
+	for action, lhs in pairs(configured) do
+		if lhs ~= false and not blocked[lhs] and not local_mapping(lhs) then
+			local callback = function()
+				actions[action]()
+			end
+			vim.keymap.set("n", lhs, callback, {
+				buffer = M.buf,
+				desc = "Workspace explorer: " .. action:gsub("_", " "),
+				nowait = true,
+				silent = true,
+			})
+			M.owned_mappings[lhs] = callback
+		end
+	end
 end
 
 function M.selected(tree)

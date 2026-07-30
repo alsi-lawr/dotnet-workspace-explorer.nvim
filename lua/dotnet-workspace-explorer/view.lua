@@ -2,8 +2,31 @@ local config = require("dotnet-workspace-explorer.config")
 
 local M = { rows = {}, owned_mappings = {} }
 local ns = vim.api.nvim_create_namespace("dotnet-workspace-explorer")
+local links = {
+	Disclosure = "NonText",
+	Solution = "Title",
+	Project = "Identifier",
+	Folder = "Directory",
+	DependencyContainer = "Special",
+	Dependency = "Constant",
+	File = "Normal",
+}
+local kinds = {
+	workspace = { glyph = "solution", group = "Solution" },
+	solutionFolder = { glyph = "folder", group = "Folder" },
+	project = { glyph = "project", group = "Project" },
+	projectFolder = { glyph = "folder", group = "Folder" },
+	dependencyContainer = { glyph = "folder", group = "DependencyContainer" },
+	dependency = { glyph = "file", group = "Dependency" },
+	solutionItem = { glyph = "file", group = "File", file = true },
+	projectFile = { glyph = "file", group = "File", file = true },
+}
 local function valid(kind, id)
 	return id and vim.api["nvim_" .. kind .. "_is_valid"](id)
+end
+
+local function span(group, start, finish)
+	return { group = group, start = start, finish = finish }
 end
 
 local function write(lines, rows)
@@ -12,9 +35,32 @@ local function write(lines, rows)
 	vim.bo[M.buf].modifiable = false
 	vim.api.nvim_buf_clear_namespace(M.buf, ns, 0, -1)
 	for index, row in ipairs(rows) do
-		local group = row.depth == 0 and "DotnetWorkspaceExplorerRoot" or "DotnetWorkspaceExplorerNode"
-		vim.api.nvim_buf_add_highlight(M.buf, ns, group, index - 1, 0, -1)
+		for _, highlight in ipairs(row.highlights) do
+			vim.api.nvim_buf_add_highlight(
+				M.buf,
+				ns,
+				highlight.group,
+				index - 1,
+				highlight.start,
+				highlight.finish
+			)
+		end
 	end
+end
+
+local function file_icon(name, fallback)
+	if not config.get().presentation.devicons then
+		return fallback
+	end
+	local loaded, devicons = pcall(require, "nvim-web-devicons")
+	if not loaded or type(devicons.get_icon) ~= "function" then
+		return fallback
+	end
+	local found, icon, group = pcall(devicons.get_icon, name, nil, { default = false })
+	if found and type(icon) == "string" and icon ~= "" and type(group) == "string" then
+		return icon, group
+	end
+	return fallback
 end
 
 function M.open()
@@ -23,8 +69,12 @@ function M.open()
 		vim.api.nvim_buf_set_name(M.buf, "dotnet-workspace-explorer://tree")
 		vim.bo[M.buf].buftype, vim.bo[M.buf].bufhidden = "nofile", "hide"
 		vim.bo[M.buf].swapfile, vim.bo[M.buf].modifiable = false, false
-		vim.api.nvim_set_hl(0, "DotnetWorkspaceExplorerRoot", { default = true, link = "Title" })
-		vim.api.nvim_set_hl(0, "DotnetWorkspaceExplorerNode", { default = true, link = "Normal" })
+		for name, link in pairs(links) do
+			vim.api.nvim_set_hl(0, "DotnetWorkspaceExplorer" .. name, {
+				default = true,
+				link = link,
+			})
+		end
 	end
 	if not valid("win", M.win) then
 		local options, current = config.get(), vim.api.nvim_get_current_win()
@@ -121,13 +171,29 @@ function M.render(tree)
 		width = vim.api.nvim_win_get_width(M.win)
 	end
 	local lines, rows, by_id, glyphs = {}, {}, {}, config.get().glyphs
-	local kinds = { workspace = "solution", solutionFolder = "folder", project = "project" }
 	local function add(id, depth, parents)
 		local node, expandable = tree:get_node(id), tree:is_expandable(id)
 		local mark = expandable and (tree.expanded[id] and glyphs.open or glyphs.closed) or glyphs.leaf
-		lines[#lines + 1] = ("  "):rep(depth)
-			.. table.concat({ mark, glyphs[kinds[node.kind] or "file"], node.name }, " ")
-		rows[#rows + 1] = { id = id, depth = depth, ancestors = parents }
+		local kind = kinds[node.kind] or kinds.projectFile
+		local icon, icon_group = glyphs[kind.glyph], nil
+		if kind.file then
+			icon, icon_group = file_icon(node.name, icon)
+		end
+		local indent, name = ("  "):rep(depth), node.name:gsub("[\r\n]+[ \t]*", "\t")
+		local disclosure_start = #indent
+		local icon_start = disclosure_start + #mark + 1
+		local name_start = icon_start + #icon + 1
+		lines[#lines + 1] = indent .. mark .. " " .. icon .. " " .. name
+		rows[#rows + 1] = {
+			id = id,
+			depth = depth,
+			ancestors = parents,
+			highlights = {
+				span("DotnetWorkspaceExplorerDisclosure", disclosure_start, disclosure_start + #mark),
+				span(icon_group or "DotnetWorkspaceExplorer" .. kind.group, icon_start, icon_start + #icon),
+				span("DotnetWorkspaceExplorer" .. kind.group, name_start, name_start + #name),
+			},
+		}
 		by_id[id] = #rows
 		if tree.expanded[id] then
 			parents = vim.list_extend(vim.deepcopy(parents), { id })

@@ -310,7 +310,13 @@ end
 function Workspace:is_expandable(id)
 	local node = self.nodes[id]
 	return node
-		and (node.kind == "workspace" or node.kind == "solutionFolder" or node.kind == "project")
+		and (
+			node.kind == "workspace"
+			or node.kind == "solutionFolder"
+			or node.kind == "project"
+			or node.kind == "projectFolder"
+			or node.kind == "dependencyContainer"
+		)
 end
 
 function Workspace:is_terminal()

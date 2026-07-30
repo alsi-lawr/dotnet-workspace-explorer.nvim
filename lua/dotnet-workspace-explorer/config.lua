@@ -16,6 +16,9 @@ local function defaults()
 			return vim.fn.getcwd()
 		end,
 		position = "left",
+		presentation = {
+			devicons = false,
+		},
 		width = 30,
 		glyphs = {
 			closed = ">",
@@ -92,11 +95,17 @@ local function validate_input(options)
 		command = true,
 		target = true,
 		position = true,
+		presentation = true,
 		width = true,
 		glyphs = true,
 		mappings = true,
 		actions = true,
 	}, "options")
+
+	if options.presentation ~= nil then
+		ensure_table(options.presentation, "presentation")
+		ensure_known_keys(options.presentation, { devicons = true }, "presentation")
+	end
 
 	if options.glyphs ~= nil then
 		ensure_table(options.glyphs, "glyphs")
@@ -138,6 +147,9 @@ local function validate(options)
 	end
 	if options.position ~= "left" and options.position ~= "right" then
 		fail("position must be 'left' or 'right'")
+	end
+	if type(options.presentation.devicons) ~= "boolean" then
+		fail("presentation.devicons must be a boolean")
 	end
 	if type(options.width) ~= "number" or options.width <= 0 or options.width % 1 ~= 0 then
 		fail("width must be a positive integer")

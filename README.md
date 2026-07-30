@@ -1,54 +1,33 @@
 <div align="center">
 
-<img
-  src="docs/assets/dotnet-workspace-explorer.svg"
-  width="128"
-  height="128"
-  alt="dotnet-workspace-explorer.nvim logo"
->
+<img src="docs/assets/dotnet-workspace-explorer.svg" width="128" alt="Explorer logo">
 
 # dotnet-workspace-explorer.nvim
 
 **A Visual Studio-inspired .NET solution explorer for Neovim.**
 
 <a href="#status">
-  <img
-    alt="Status: experimental"
-    src="https://img.shields.io/badge/status-experimental-f59e0b"
-  >
+<img alt="Experimental" src="https://img.shields.io/badge/status-experimental-f59e0b">
 </a>
 <a href="#quick-start">
-  <img
-    alt="Neovim 0.12+"
-    src="https://img.shields.io/badge/Neovim-0.12%2B-57A143?logo=neovim&logoColor=white"
-  >
+<img alt="Neovim 0.12+" src="https://img.shields.io/badge/Neovim-0.12%2B-57A143?logo=neovim">
 </a>
 <a href="https://github.com/alsi-lawr/dotnet-workspace-explorer">
-  <img
-    alt="Core: dotnet-workspace-explorer"
-    src="https://img.shields.io/badge/core-.NET-512bd4?logo=dotnet&logoColor=white"
-  >
+<img alt=".NET core" src="https://img.shields.io/badge/core-.NET-512bd4?logo=dotnet">
 </a>
 <a href="LICENSE">
-  <img
-    alt="MIT license"
-    src="https://img.shields.io/github/license/alsi-lawr/dotnet-workspace-explorer.nvim"
-  >
+<img alt="MIT" src="https://img.shields.io/badge/license-MIT-22c55e">
 </a>
 
 </div>
 
-`dotnet-workspace-explorer.nvim` renders the core's authoritative workspace model as a native,
-fully scrollable Neovim tree. It keeps solution folders, projects, files, references, and package
-dependencies semantic across C#, F#, and Visual Basic workspaces instead of flattening the solution
-into a file browser.
+See your .NET solution the way it was organised, not flattened into a generic file browser. Browse
+projects, solution folders, source files, references, and NuGet packages across C#, F#, and Visual
+Basic in a familiar, fully scrollable tree.
 
 <div align="center">
 
-<img
-  src="docs/assets/explorer.webp"
-  alt="Semantic .NET workspace explorer docked on both sides of Neovim"
->
+<img src="docs/assets/explorer.webp" alt=".NET solution explorer in Neovim">
 
 </div>
 

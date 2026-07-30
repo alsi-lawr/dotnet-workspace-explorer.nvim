@@ -44,7 +44,40 @@ cat >"$fixture/src/Studio.CSharp/Studio.CSharp.csproj" <<'EOF'
 </Project>
 EOF
 
-for name in AddDocument CloseWorkspace CreateWorkspace OpenWorkspace; do
+for name in \
+	AddDocument \
+	AddProject \
+	CloseWorkspace \
+	CollapseAll \
+	CreateSolutionFolder \
+	CreateWorkspace \
+	DeleteDocument \
+	ExpandAll \
+	FocusExplorer \
+	MoveDocument \
+	OpenDocument \
+	OpenWorkspace \
+	RefreshDependencies \
+	RefreshWorkspace \
+	ReloadProject \
+	RemoveProject \
+	RenameDocument \
+	RenameProject \
+	RevealActiveDocument \
+	SaveWorkspace \
+	SelectProject \
+	ShowDependencies \
+	ShowProperties \
+	SortProjects \
+	SyncActiveDocument \
+	TogglePreview \
+	UnloadProject \
+	UpdatePackage \
+	ValidateWorkspace \
+	WatchWorkspace \
+	WorkspaceHistory \
+	WorkspaceSearch
+do
 	printf 'namespace Studio.CSharp.Actions; internal sealed class %s { }\\n' "$name" \
 		>"$fixture/src/Studio.CSharp/Actions/$name.cs"
 done

@@ -55,9 +55,8 @@ Enter
 Type "l"
 Sleep 3s
 Ctrl+d
-Sleep 2s
-Ctrl+u
-Sleep 2s
+Ctrl+d
+Sleep 4s
 Type "/P Studio.CSharp"
 Enter
 Sleep 1s

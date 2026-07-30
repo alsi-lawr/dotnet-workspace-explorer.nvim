@@ -196,6 +196,7 @@ function Workspace:expand(id, callback)
 	if not self.nodes[id] then
 		return callback(rpc.problem("unknown_node", "The node no longer exists."))
 	end
+	local previous_expanded = self.expanded[id]
 	self.expanded[id] = true
 	if self.children[id] then
 		self.on_change(self)
@@ -207,6 +208,11 @@ function Workspace:expand(id, callback)
 	end
 	local waiters = { callback }
 	self.loading[id] = waiters
+	local function restore_expansion()
+		if self.expanded[id] then
+			self.expanded[id] = previous_expanded
+		end
+	end
 	local function finish(err, result)
 		if self.loading[id] == waiters then
 			self.loading[id] = nil
@@ -228,6 +234,7 @@ function Workspace:expand(id, callback)
 				return finish(stale())
 			end
 			if request_error then
+				restore_expansion()
 				if request_error.code == "workspace_conflict" then
 					self:_invalidate()
 				end
@@ -240,6 +247,7 @@ function Workspace:expand(id, callback)
 				or type(result.nodes) ~= "table"
 				or not vim.islist(result.nodes)
 			then
+				restore_expansion()
 				self:_invalidate()
 				return finish(stale())
 			end
@@ -250,6 +258,7 @@ function Workspace:expand(id, callback)
 			if token ~= nil then
 				if type(token) ~= "string" or token == "" or seen_tokens[token] then
 					local reason = rpc.problem("invalid_tree", "The children continuation is invalid.")
+					restore_expansion()
 					finish(reason)
 					return self.client:_terminate(reason)
 				end
@@ -259,6 +268,7 @@ function Workspace:expand(id, callback)
 			local nodes, ids = self:_normalize_nodes(collected, id, expected_revision, self.nodes)
 			if not nodes then
 				local reason = rpc.problem("invalid_tree", "The workspace children response is invalid.")
+				restore_expansion()
 				finish(reason)
 				return self.client:_terminate(reason)
 			end

@@ -3,11 +3,43 @@ local view = require("dotnet-workspace-explorer.view")
 local Workspace = require("dotnet-workspace-explorer.workspace").Workspace
 
 local M = {}
-local tree, target
+local tree, target, initial_failed
 local function fail(err)
 	if err then
 		view.failure(err)
 	end
+end
+
+local function start(resolved)
+	if tree then
+		tree:stop("session_replaced", true)
+	end
+	target, initial_failed = resolved, false
+	view.loading()
+	local current, loaded
+	current = Workspace.new({
+		command = config.get().command,
+		target = target,
+		on_change = function(state)
+			if current == tree then
+				loaded, initial_failed = true, false
+				view.render(state)
+			end
+		end,
+		on_error = function(err)
+			if current == tree then
+				initial_failed = not loaded
+				fail(err)
+			end
+		end,
+	})
+	tree = current
+	tree:start(function(err)
+		if err and current == tree then
+			initial_failed = not loaded
+			fail(err)
+		end
+	end)
 end
 
 function M.setup(options)
@@ -23,20 +55,12 @@ function M.open(requested)
 	end
 	view.open()
 	if tree and target == resolved then
-		return view.render(tree)
+		if not initial_failed then
+			view.render(tree)
+		end
+		return
 	end
-	if tree then
-		tree:stop("target_replaced", true)
-	end
-	target = resolved
-	view.loading()
-	tree = Workspace.new({
-		command = config.get().command,
-		target = target,
-		on_change = view.render,
-		on_error = fail,
-	})
-	tree:start(fail)
+	start(resolved)
 end
 
 function M.close()
@@ -44,7 +68,7 @@ function M.close()
 	if tree then
 		tree:stop("explorer_closed")
 	end
-	tree, target = nil, nil
+	tree, target, initial_failed = nil, nil, nil
 end
 
 function M.toggle(requested)
@@ -62,6 +86,9 @@ end
 function M.refresh()
 	if not tree then
 		return view.failure({ message = "Open the workspace explorer before refreshing." })
+	end
+	if initial_failed then
+		return start(target)
 	end
 	view.selected(tree)
 	tree:refresh(fail)

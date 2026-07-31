@@ -39,6 +39,11 @@ local function default_spawn(command, options, on_exit)
 	return vim.system(command, options, on_exit)
 end
 
+local function exit_message(stderr)
+	local message = stderr:gsub("^%s+", ""):gsub("%s+$", "")
+	return message ~= "" and message or "Workspace process exited."
+end
+
 local Client = {}
 Client.__index = Client
 
@@ -311,7 +316,7 @@ function Client:start(callback)
 		end,
 	}, function(result)
 		if self:_live(captured) then
-			self:_terminate(problem("unexpected_exit", "Workspace process exited.", result))
+			self:_terminate(problem("unexpected_exit", exit_message(self.stderr), result))
 		end
 	end)
 	if not ok or process == nil then

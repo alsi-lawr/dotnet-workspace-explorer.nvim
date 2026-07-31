@@ -65,10 +65,45 @@ for _, node in pairs(nodes) do
 	assert_equal(container, tree:is_expandable(node.id) == true, node.kind .. " expandability")
 end
 
+local resolution_request
+local resolved_path = vim.fs.abspath(vim.fn.tempname() .. ".fs")
+local resolution_tree = setmetatable({
+	nodes = { ["project-file"] = nodes.project_file },
+	epoch = 0,
+	revision = 7,
+	workspace_id = "workspace",
+}, { __index = Workspace })
+resolution_tree.client = {
+	generation = 1,
+	inert = false,
+	request = function(_, method, parameters, callback)
+		resolution_request = { method, parameters }
+		callback(nil, {
+			path = resolved_path,
+			revision = 7,
+			targetNodeId = "project-file",
+		})
+	end,
+}
+local resolved
+resolution_tree:resolve_file("project-file", function(err, path)
+	assert_equal(nil, err, "valid file resolution error")
+	resolved = path
+end)
+assert_equal(
+	{ "workspace/file/resolve", { expectedRevision = 7, targetNodeId = "project-file" } },
+	resolution_request,
+	"file resolution request"
+)
+assert_equal(resolved_path, resolved, "core-owned path result")
+
 assert(not pcall(config.setup, { presentation = { devicons = "yes" } }))
 assert(not pcall(config.setup, { presentation = { colour = true } }))
 config.setup()
 assert_equal(false, config.get().presentation.devicons, "Devicons default")
+assert_equal("", config.get().glyphs.closed, "closed disclosure glyph default")
+assert_equal("", config.get().glyphs.open, "open disclosure glyph default")
+assert_equal("", config.get().glyphs.leaf, "leaf disclosure glyph default")
 
 local loads, lookups, notifications = 0, {}, 0
 package.loaded["nvim-web-devicons"] = nil
@@ -117,6 +152,8 @@ view.render(tree)
 assert_equal(0, loads, "disabled Devicons stays unloaded")
 local lines = vim.api.nvim_buf_get_lines(view.buf, 0, -1, false)
 assert_equal(8, #lines, "one row per semantic node")
+assert_equal("S Example.slnx", lines[1], "root row omits disclosure marker")
+assert_equal("  D Source", lines[2], "child row keeps semantic indentation")
 assert(lines[6]:find("Multi\tName.fs", 1, true), "multiline name collapses to one tab")
 assert_equal(
 	"Multi\r\n\tName.fs",
@@ -168,7 +205,7 @@ for _, fallback in ipairs({
 	package.loaded["nvim-web-devicons"] = { get_icon = fallback }
 	view.render(tree)
 	lines = vim.api.nvim_buf_get_lines(view.buf, 0, -1, false)
-	assert(lines[6]:find(" F Multi\tName.fs", 1, true), "lookup failure uses file glyph")
+	assert_equal("        F Multi\tName.fs", lines[6], "lookup failure uses file glyph")
 end
 
 package.loaded["nvim-web-devicons"] = nil
@@ -177,11 +214,11 @@ package.preload["nvim-web-devicons"] = function()
 end
 view.render(tree)
 lines = vim.api.nvim_buf_get_lines(view.buf, 0, -1, false)
-assert(lines[6]:find(" F Multi\tName.fs", 1, true), "missing module uses file glyph")
-assert(lines[1]:find(" S Example.slnx", 1, true), "missing module uses solution glyph")
-assert(lines[2]:find(" D Source", 1, true), "missing module uses folder glyph")
-assert(lines[4]:find(" P Example.fsproj", 1, true), "missing module uses project glyph")
-assert(lines[8]:find(" F FSharp.Core (10.0.0)", 1, true), "missing module uses dependency glyph")
+assert_equal("        F Multi\tName.fs", lines[6], "missing module uses file glyph")
+assert_equal("S Example.slnx", lines[1], "missing module uses solution glyph")
+assert_equal("  D Source", lines[2], "missing module uses folder glyph")
+assert_equal("    P Example.fsproj", lines[4], "missing module uses project glyph")
+assert_equal("        F FSharp.Core (10.0.0)", lines[8], "missing module uses dependency glyph")
 assert_equal(0, notifications, "fallbacks stay silent")
 
 vim.api.nvim_buf_add_highlight = add_highlight
@@ -212,6 +249,9 @@ for index = 1, 30 do
 end
 
 local factory_options
+local opened_path = vim.fn.tempname() .. ".fs"
+vim.fn.writefile({ "module OpenedFromExplorer" }, opened_path)
+local resolved_id
 tree.children["project-folder"] = project_files
 tree.selected_id, tree.revision = "project-file-20", 7
 function tree:start(callback)
@@ -224,6 +264,10 @@ function tree.is_terminal()
 end
 function tree.has_capability()
 	return true
+end
+function tree.resolve_file(_, id, callback)
+	resolved_id = id
+	callback(nil, opened_path)
 end
 function tree:refresh(callback)
 	if self.on_refresh then
@@ -270,7 +314,19 @@ local saved_view = vim.api.nvim_win_call(view.win, vim.fn.winsaveview)
 assert(saved_view.topline > 1, "semantic-depth probe must exercise a scrolled viewport")
 explorer.focus()
 assert_equal(view.win, vim.api.nvim_get_current_win(), "public focus reaches explorer")
-vim.api.nvim_set_current_win(original_window)
+explorer.activate()
+assert_equal("project-file-20", resolved_id, "file activation delegates path resolution")
+assert_equal(
+	original_window,
+	vim.api.nvim_get_current_win(),
+	"file opens in previous editor window"
+)
+assert_equal(
+	vim.fs.normalize(opened_path),
+	vim.fs.normalize(vim.api.nvim_buf_get_name(0)),
+	"file activation opens the resolved path"
+)
+assert(view.is_open(), "file activation keeps the explorer open")
 explorer.refresh()
 assert_equal("project-file-20", tree.selected_id, "Refresh preserves deep selection")
 assert_equal(41, vim.api.nvim_win_get_width(view.win), "Refresh preserves explorer width")
@@ -293,4 +349,6 @@ tree.on_refresh = nil
 tree.children["project-folder"] = project_files
 factory_options.on_change(tree)
 
+explorer.close()
+vim.fn.delete(opened_path)
 print("DWE presentation probe passed")

@@ -4,6 +4,7 @@ local UINT32_MAX = 4294967295
 local capabilities = {
 	"workspace.root",
 	"workspace.children",
+	"workspace.file.resolve",
 	"workspace.refresh",
 	"workspace.delta",
 	"workspace.reset",
@@ -17,6 +18,7 @@ local capabilities = {
 local method_capabilities = {
 	["workspace/root"] = "workspace.root",
 	["workspace/children"] = "workspace.children",
+	["workspace/file/resolve"] = "workspace.file.resolve",
 	["workspace/refresh"] = "workspace.refresh",
 	["workspace/create/options"] = "workspace.create.options",
 	["workspace/commands/list"] = "workspace.commands.list",

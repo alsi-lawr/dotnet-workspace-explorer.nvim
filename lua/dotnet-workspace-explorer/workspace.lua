@@ -9,6 +9,33 @@ local function stale()
 	return rpc.problem("stale_tree", "The workspace tree changed while the request was running.")
 end
 
+local function is_absolute(path)
+	local absolute = vim.fs.abspath(path)
+	return absolute == path or vim.fs.normalize(absolute) == vim.fs.normalize(path)
+end
+
+local function valid_file_resolution(result, id, revision)
+	if
+		type(result) ~= "table"
+		or result.revision ~= revision
+		or result.targetNodeId ~= id
+		or type(result.path) ~= "string"
+		or result.path == ""
+		or not is_absolute(result.path)
+	then
+		return false
+	end
+	local keys = { path = true, revision = true, targetNodeId = true }
+	local count = 0
+	for key in pairs(result) do
+		if not keys[key] then
+			return false
+		end
+		count = count + 1
+	end
+	return count == 3
+end
+
 local function normalize_node(value, workspace_id, revision, parent_id)
 	if
 		type(value) ~= "table"
@@ -329,6 +356,37 @@ end
 
 function Workspace:has_capability(name)
 	return self.client:has_capability(name)
+end
+
+function Workspace:resolve_file(id, callback)
+	callback = callback or noop
+	local node = self.nodes[id]
+	if not node or (node.kind ~= "projectFile" and node.kind ~= "solutionItem") then
+		return callback(rpc.problem("not_openable", "The selected node is not an openable file."))
+	end
+	local generation, epoch, workspace_id = self.client.generation, self.epoch, self.workspace_id
+	local revision = self.revision
+	self.client:request(
+		"workspace/file/resolve",
+		{ targetNodeId = id, expectedRevision = revision },
+		function(err, result)
+			if not self:_valid(generation, epoch, workspace_id) then
+				return callback(stale())
+			end
+			if err then
+				if err.code == "workspace_conflict" then
+					self:_invalidate()
+				end
+				return callback(err)
+			end
+			if not valid_file_resolution(result, id, revision) then
+				return self.client:_terminate(
+					rpc.problem("invalid_file_resolution", "The workspace file response is incompatible.")
+				)
+			end
+			callback(nil, result.path)
+		end
+	)
 end
 
 function Workspace:refresh(callback)

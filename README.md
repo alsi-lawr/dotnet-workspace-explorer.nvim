@@ -71,9 +71,10 @@ Or pass a specific `.sln`, `.slnx`, or read-only `.slnf` target:
 :DotnetWorkspaceExplorerOpen /path/to/Demo.slnx
 ```
 
-The explorer opens on the left by default. Use `<CR>` or `l` to expand, `h` to collapse, `a` for
-contextual creation, `d` for contextual deletion, `R` to refresh, and `q` to close. All actions are
-also commands, and every mapping can be replaced or disabled.
+The explorer opens on the left by default. Use `<CR>` to expand or collapse containers and open
+files in the previous editor window, `l` to expand, `h` to collapse, `a` for contextual creation,
+`d` for contextual deletion, `R` to refresh, and `q` to close. All actions are also commands, and
+every mapping can be replaced or disabled.
 
 ## Why this explorer
 
@@ -92,9 +93,7 @@ also commands, and every mapping can be replaced or disabled.
 
 ## Status
 
-The plugin is experimental and does not yet have a tagged release. Existing files cannot be opened
-from the tree until the core publishes an authoritative path-resolution operation; the explorer
-deliberately does not guess paths.
+The plugin is experimental and does not yet have a tagged release.
 
 ## Contributing
 

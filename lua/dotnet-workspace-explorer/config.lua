@@ -22,9 +22,9 @@ local function defaults()
 		},
 		width = 30,
 		glyphs = {
-			closed = ">",
-			open = "v",
-			leaf = " ",
+			closed = "",
+			open = "",
+			leaf = "",
 			solution = "S",
 			project = "P",
 			folder = "D",

@@ -129,7 +129,7 @@ end
 local function with_container(action)
 	local id = tree and view.selected(tree)
 	if not id or not tree:is_expandable(id) then
-		return view.failure({ message = "Core path resolution is unavailable for this node." })
+		return view.failure({ message = "The selected node is not expandable." })
 	end
 	action(id)
 end
@@ -147,13 +147,30 @@ function M.collapse()
 end
 
 function M.activate()
-	with_container(function(id)
+	local id = tree and view.selected(tree)
+	local node = id and tree:get_node(id)
+	if not node then
+		return fail({ message = "Select a workspace node before activating it." })
+	end
+	if tree:is_expandable(id) then
 		if tree.expanded[id] then
 			tree:collapse(id)
 		else
 			tree:expand(id, fail)
 		end
-	end)
+	elseif node.kind == "projectFile" or node.kind == "solutionItem" then
+		tree:resolve_file(id, function(err, path)
+			if err then
+				return fail(err)
+			end
+			local opened, open_error = view.open_file(path)
+			if not opened then
+				fail({ message = open_error })
+			end
+		end)
+	else
+		fail({ message = "The selected node cannot be opened." })
+	end
 end
 
 function M.new()

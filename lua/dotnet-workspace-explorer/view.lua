@@ -9,6 +9,7 @@ local links = {
 	Folder = "Directory",
 	DependencyContainer = "Special",
 	Dependency = "Constant",
+	DependencyProperty = "Comment",
 	File = "Normal",
 }
 local kinds = {
@@ -18,6 +19,7 @@ local kinds = {
 	projectFolder = { glyph = "folder", group = "Folder" },
 	dependencyContainer = { glyph = "folder", group = "DependencyContainer" },
 	dependency = { glyph = "file", group = "Dependency", devicon = "dependency.dll" },
+	dependencyProperty = { icon = "", group = "DependencyProperty" },
 	solutionItem = { glyph = "file", group = "File" },
 	projectFile = { glyph = "file", group = "File" },
 }
@@ -77,6 +79,9 @@ local function write(lines, rows)
 end
 
 local function presentation_icon(node, kind, fallback, expanded)
+	if kind.icon ~= nil then
+		return kind.icon
+	end
 	if not config.get().presentation.devicons then
 		return fallback
 	end
@@ -250,7 +255,8 @@ function M.render(tree)
 		local node, expandable = tree:get_node(id), tree:is_expandable(id)
 		local mark = expandable and (tree.expanded[id] and glyphs.open or glyphs.closed) or glyphs.leaf
 		local kind = kinds[node.kind] or kinds.projectFile
-		local icon, icon_group = presentation_icon(node, kind, glyphs[kind.glyph], tree.expanded[id])
+		local fallback = kind.icon ~= nil and kind.icon or glyphs[kind.glyph]
+		local icon, icon_group = presentation_icon(node, kind, fallback, tree.expanded[id])
 		local indent, name = ("  "):rep(depth), node.name:gsub("[\r\n]+[ \t]*", "\t")
 		local prefix, highlights = indent, {}
 		if mark ~= "" then
@@ -260,10 +266,13 @@ function M.render(tree)
 				span("DotnetWorkspaceExplorerDisclosure", disclosure_start, disclosure_start + #mark)
 		end
 		local icon_start = #prefix
-		local name_start = icon_start + #icon + 1
-		lines[#lines + 1] = prefix .. icon .. " " .. name
-		highlights[#highlights + 1] =
-			span(icon_group or "DotnetWorkspaceExplorer" .. kind.group, icon_start, icon_start + #icon)
+		local separator = icon ~= "" and " " or ""
+		local name_start = icon_start + #icon + #separator
+		lines[#lines + 1] = prefix .. icon .. separator .. name
+		if icon ~= "" then
+			highlights[#highlights + 1] =
+				span(icon_group or "DotnetWorkspaceExplorer" .. kind.group, icon_start, icon_start + #icon)
+		end
 		highlights[#highlights + 1] =
 			span("DotnetWorkspaceExplorer" .. kind.group, name_start, name_start + #name)
 		rows[#rows + 1] = {

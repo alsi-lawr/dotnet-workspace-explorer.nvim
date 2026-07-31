@@ -77,6 +77,7 @@ local function expandable(node)
 			or node.kind == "project"
 			or node.kind == "projectFolder"
 			or node.kind == "dependencyContainer"
+			or node.kind == "dependency"
 		)
 end
 

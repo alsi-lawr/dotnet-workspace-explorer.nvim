@@ -29,6 +29,11 @@ local nodes = {
 		name = "Dependencies",
 	},
 	dependency = { id = "dependency", kind = "dependency", name = "FSharp.Core (10.0.0)" },
+	dependency_property = {
+		id = "dependency-property",
+		kind = "dependencyProperty",
+		name = "Version: 10.0.0",
+	},
 }
 local by_id = {}
 for _, node in pairs(nodes) do
@@ -43,6 +48,7 @@ local tree = setmetatable({
 		project = { "project-folder", "dependencies" },
 		["project-folder"] = { "project-file" },
 		dependencies = { "dependency" },
+		dependency = { "dependency-property" },
 	},
 	roots = { "workspace" },
 	expanded = {
@@ -51,6 +57,7 @@ local tree = setmetatable({
 		project = true,
 		["project-folder"] = true,
 		dependencies = true,
+		dependency = true,
 	},
 	selected_id = "project-file",
 	phase = "ready",
@@ -62,6 +69,7 @@ for _, node in pairs(nodes) do
 		or node.kind == "project"
 		or node.kind == "projectFolder"
 		or node.kind == "dependencyContainer"
+		or node.kind == "dependency"
 	assert_equal(container, tree:is_expandable(node.id) == true, node.kind .. " expandability")
 end
 
@@ -151,7 +159,7 @@ assert_equal(
 view.render(tree)
 assert_equal(0, loads, "disabled Devicons stays unloaded")
 local lines = vim.api.nvim_buf_get_lines(view.buf, 0, -1, false)
-assert_equal(8, #lines, "one row per semantic node")
+assert_equal(9, #lines, "one row per semantic node")
 assert_equal("S Example.slnx", lines[1], "root row omits disclosure marker")
 assert_equal("  D Source", lines[2], "child row keeps semantic indentation")
 assert(lines[6]:find("Multi\tName.fs", 1, true), "multiline name collapses to one tab")
@@ -219,6 +227,7 @@ assert_equal("S Example.slnx", lines[1], "missing module uses solution glyph")
 assert_equal("  D Source", lines[2], "missing module uses folder glyph")
 assert_equal("    P Example.fsproj", lines[4], "missing module uses project glyph")
 assert_equal("        F FSharp.Core (10.0.0)", lines[8], "missing module uses dependency glyph")
+assert_equal("          Version: 10.0.0", lines[9], "dependency property omits an icon")
 assert_equal(0, notifications, "fallbacks stay silent")
 
 vim.api.nvim_buf_add_highlight = add_highlight
@@ -233,6 +242,7 @@ for id, parent in pairs({
 	["project-file"] = "project-folder",
 	dependencies = "project",
 	dependency = "dependencies",
+	["dependency-property"] = "dependency",
 }) do
 	tree.nodes[id].parent_id = parent
 end

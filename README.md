@@ -74,7 +74,8 @@ Or pass a specific `.sln`, `.slnx`, or read-only `.slnf` target:
 The explorer opens on the left by default. Use `<CR>` to expand or collapse containers and open
 files in the previous editor window, `l` to expand, `h` to collapse, `a` for contextual creation,
 `d` for contextual deletion, `R` to refresh, and `q` to close. All actions are also commands, and
-every mapping can be replaced or disabled.
+every mapping can be replaced or disabled. Dependencies expand into compact, read-only
+Visual Studio-inspired reference properties, including available package and assembly versions.
 
 ## Why this explorer
 

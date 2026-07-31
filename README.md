@@ -72,18 +72,37 @@ Or pass a specific `.sln`, `.slnx`, or read-only `.slnf` target:
 ```
 
 The explorer opens on the left by default. Use `<CR>` to expand or collapse containers and open
-files in the previous editor window, `l` to expand, `h` to collapse, `a` for contextual creation,
-`d` for contextual deletion, `R` to refresh, and `q` to close. All actions are also commands, and
-every mapping can be replaced or disabled. Dependencies expand into compact, read-only
-Visual Studio-inspired reference properties, including available package and assembly versions.
+files in the previous editor window. Use `e` to edit a project file, `r` to rename, `m` or `c` to
+mark nodes for a move or copy, and `p` to place the marked batch. `E` expands the complete solution
+and `W` collapses it. The existing `l`, `h`, `a`, `d`, `R`, and `q` mappings expand, collapse,
+create, delete, refresh, and close. Dependencies expand into compact, read-only Visual
+Studio-inspired reference properties, including available package and assembly versions.
+
+Every action is also available through its `DotnetWorkspaceExplorer*` command and public Lua
+function. Mappings can be replaced or disabled individually; `clear_marks` and `git_refresh` have
+no default key.
+
+Git suffixes are opt-in:
+
+```lua
+require("dotnet-workspace-explorer").setup({
+	git = {
+		enable = true,
+	},
+})
+```
+
+After enabling Git for an open explorer, run `:DotnetWorkspaceExplorerRefresh` to negotiate a fresh
+session. Added nodes show `+`; other working-tree changes show `~`. Status updates are event-driven,
+and `:DotnetWorkspaceExplorerGitRefresh` requests one explicitly.
 
 ## Why this explorer
 
 - **Solution-aware:** the .NET core owns the hierarchy rather than asking Lua to infer it.
 - **Theme-native:** semantic highlights follow the active colorscheme; Devicons are optional.
 - **Editor-native:** the explorer is an ordinary split with normal Neovim scrolling and movement.
-- **Mutation-safe:** creation and deletion are fully previewed, explicitly confirmed, and applied
-  by the core.
+- **Mutation-safe:** creation, deletion, rename, and marked move/copy batches are fully previewed,
+  explicitly confirmed, and applied by the core.
 
 ## Documentation
 

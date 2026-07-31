@@ -4,10 +4,19 @@ local mapping_names = {
 	activate = true,
 	close = true,
 	collapse = true,
+	collapse_all = true,
 	delete = true,
+	edit = true,
 	expand = true,
+	expand_all = true,
+	git_refresh = true,
+	clear_marks = true,
+	mark_copy = true,
+	mark_move = true,
 	new = true,
+	place = true,
 	refresh = true,
+	rename = true,
 }
 
 local function defaults()
@@ -19,6 +28,9 @@ local function defaults()
 		position = "left",
 		presentation = {
 			devicons = false,
+		},
+		git = {
+			enable = false,
 		},
 		width = 30,
 		glyphs = {
@@ -33,10 +45,19 @@ local function defaults()
 		mappings = {
 			activate = "<CR>",
 			collapse = "h",
+			collapse_all = "W",
+			edit = "e",
 			expand = "l",
+			expand_all = "E",
+			git_refresh = false,
+			clear_marks = false,
+			mark_copy = "c",
+			mark_move = "m",
 			new = "a",
+			place = "p",
 			delete = "d",
 			refresh = "R",
+			rename = "r",
 			close = "q",
 		},
 	}
@@ -93,6 +114,7 @@ local function validate_input(options)
 		target = true,
 		position = true,
 		presentation = true,
+		git = true,
 		width = true,
 		glyphs = true,
 		mappings = true,
@@ -101,6 +123,11 @@ local function validate_input(options)
 	if options.presentation ~= nil then
 		ensure_table(options.presentation, "presentation")
 		ensure_known_keys(options.presentation, { devicons = true }, "presentation")
+	end
+
+	if options.git ~= nil then
+		ensure_table(options.git, "git")
+		ensure_known_keys(options.git, { enable = true }, "git")
 	end
 
 	if options.glyphs ~= nil then
@@ -137,6 +164,9 @@ local function validate(options)
 	end
 	if type(options.presentation.devicons) ~= "boolean" then
 		fail("presentation.devicons must be a boolean")
+	end
+	if type(options.git.enable) ~= "boolean" then
+		fail("git.enable must be a boolean")
 	end
 	if type(options.width) ~= "number" or options.width <= 0 or options.width % 1 ~= 0 then
 		fail("width must be a positive integer")

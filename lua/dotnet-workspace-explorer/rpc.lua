@@ -15,10 +15,12 @@ local capabilities = {
 	"workspace.commands.execute",
 	"workspace.operations.completed",
 }
+local git_capability = "workspace.git.status"
 local method_capabilities = {
 	["workspace/root"] = "workspace.root",
 	["workspace/children"] = "workspace.children",
 	["workspace/file/resolve"] = "workspace.file.resolve",
+	["workspace/git/status"] = git_capability,
 	["workspace/refresh"] = "workspace.refresh",
 	["workspace/create/options"] = "workspace.create.options",
 	["workspace/commands/list"] = "workspace.commands.list",
@@ -73,6 +75,7 @@ function Client.new(options)
 		max_page_size = options.max_page_size or 256,
 		on_notification = options.on_notification or function() end,
 		on_error = options.on_error or function() end,
+		git_enabled = options.git_enabled == true,
 		state = "new",
 		pending = {},
 		next_id = 0,
@@ -325,14 +328,18 @@ function Client:start(callback)
 		return self:_terminate(problem("spawn_failed", tostring(process)))
 	end
 	self.process = process
+	local requested_capabilities = vim.deepcopy(capabilities)
+	if self.git_enabled then
+		requested_capabilities[#requested_capabilities + 1] = git_capability
+	end
 	local requested = {}
-	for _, name in ipairs(capabilities) do
+	for _, name in ipairs(requested_capabilities) do
 		requested[name] = true
 	end
 	self:_send("initialize", {
 		protocolVersion = { major = 1, minor = 0 },
 		clientInfo = { name = "dotnet-workspace-explorer.nvim" },
-		capabilities = capabilities,
+		capabilities = requested_capabilities,
 		limits = { maxFrameBytes = 16777216, maxPageSize = self.max_page_size },
 	}, function(rpc_error, result)
 		if rpc_error then

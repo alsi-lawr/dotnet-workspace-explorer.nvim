@@ -472,6 +472,57 @@ do
 		requested["workspace.operations.completed"],
 		"operation-completion capability was not requested"
 	)
+	assert(not requested["workspace.git.status"], "disabled Git capability was requested")
+	client:stop("test_complete", true)
+end
+
+do
+	local frames, started = {}, false
+	local client = rpc.Client.new({
+		command = "unused",
+		target = "unused",
+		git_enabled = true,
+		spawn = function(_, stream, _)
+			local process = {}
+			function process.write(_, bytes)
+				local frame = vim.mpack.decode(bytes)
+				frames[#frames + 1] = frame
+				if frame[3] == "initialize" then
+					stream.stdout(
+						nil,
+						vim.mpack.encode({
+							1,
+							frame[2],
+							vim.NIL,
+							{
+								protocolVersion = { major = 1, minor = 0 },
+								workspace = { id = "workspace-id", revision = 0 },
+								capabilities = frame[4].capabilities,
+								limits = { maxFrameBytes = 65536, maxPageSize = 100 },
+							},
+						})
+					)
+				end
+			end
+			function process.kill() end
+			return process
+		end,
+	})
+	client:start(function(err)
+		assert_equal(nil, err, "Git-enabled RPC initialization")
+		started = true
+	end)
+	assert(
+		vim.wait(1000, function()
+			return started
+		end),
+		"Git-enabled RPC initialization timed out"
+	)
+	local requested = {}
+	for _, capability in ipairs(frames[1][4].capabilities) do
+		requested[capability] = true
+	end
+	assert(requested["workspace.git.status"], "enabled Git capability was not requested")
 	client:stop("test_complete", true)
 end
 

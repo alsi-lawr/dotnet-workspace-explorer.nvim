@@ -36,6 +36,12 @@ nvim -u NONE -i NONE --noplugin --headless \
   --cmd "set runtimepath^=$PWD" -l tests/headless/mutations.lua
 nvim -u NONE -i NONE --noplugin --headless \
   --cmd "set runtimepath^=$PWD" -l tests/headless/workspace.lua
+nvim -u NONE -i NONE --noplugin --headless \
+  --cmd "set runtimepath^=$PWD" -l tests/headless/editing.lua
+nvim -u NONE -i NONE --noplugin --headless \
+  --cmd "set runtimepath^=$PWD" -l tests/headless/git.lua
+nvim -u NONE -i NONE --noplugin --headless \
+  --cmd "set runtimepath^=$PWD" -l tests/headless/tree-actions.lua
 ```
 
 The smoke keeps `setup` and plugin loading inert. The presentation probe exercises the semantic
@@ -45,12 +51,26 @@ rows. The mutation probe covers contextual creation and deletion, including capa
 cancellation, confirmation, and operation-completion boundaries.
 The workspace probe covers notification reconciliation, transparent hydration retry, and
 preservation of expanded paths and deep selection.
+The editing probe covers exact rename/move/copy envelopes and mark lifecycle. The Git probe covers
+conditional status negotiation, freshness, coalescing, cleanup, and decoration replacement. The
+tree-action probe covers project-file resolution plus atomic full expansion and collapse.
+
+After creating a disposable fixture under `.agent-workspace`, the bounded real-core probe accepts
+explicit paths:
+
+```sh
+DWE_CORE=/path/to/Dotnet.WorkspaceExplorer \
+DWE_FIXTURE="$PWD/.agent-workspace/real-core/fixture/SemanticStudio.slnx" \
+nvim -u NONE -i NONE --noplugin --headless \
+  --cmd "set runtimepath^=$PWD" -l tests/real-core-smoke.lua
+```
 
 ## Making changes
 
 - Keep transport and generation safety in `rpc.lua`, normalized tree state in `workspace.lua`,
-  context action orchestration in `mutations.lua`, public lifecycle actions in `init.lua`,
-  configuration in `config.lua`, and presentation in `view.lua`.
+  New/Delete orchestration in `mutations.lua`, rename/move/copy orchestration in `editing.lua`,
+  event-driven Git status in `git.lua`, public lifecycle actions in `init.lua`, configuration in
+  `config.lua`, and presentation in `view.lua`.
 - Preserve the core as the authority for solution state and writes. Lua must not infer workspace
   paths or edit project files directly.
 - Expose user actions as commands before adding buffer-local convenience mappings.

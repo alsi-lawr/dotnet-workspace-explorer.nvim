@@ -94,6 +94,7 @@ function Workspace.new(options)
 		on_change = options.on_change or noop,
 		on_error = options.on_error or noop,
 		on_notification = options.on_notification or noop,
+		git_enabled = options.git_enabled == true,
 	}, Workspace)
 	self.client = rpc.Client.new({
 		command = options.command,
@@ -107,6 +108,7 @@ function Workspace.new(options)
 			self.phase = "failed"
 			self.on_error(reason)
 		end,
+		git_enabled = options.git_enabled == true,
 	})
 	return self
 end
@@ -507,6 +509,101 @@ function Workspace:collapse(id)
 	self.on_change(self)
 end
 
+function Workspace:expand_all(callback)
+	callback = callback or noop
+	if self.phase ~= "ready" then
+		return callback(rpc.problem("not_ready", "The workspace tree is not ready."))
+	end
+	local captured = {
+		generation = self.client.generation,
+		epoch = self.epoch,
+		workspace = self.workspace_id,
+	}
+	local expected_revision = self.revision
+	local function retry_after_reconcile()
+		if
+			self.client.generation ~= captured.generation
+			or self.client.inert
+			or self.workspace_id ~= captured.workspace
+		then
+			return callback(stale())
+		end
+		local function resume(err)
+			if err then
+				return callback(err)
+			end
+			if self.revision <= expected_revision then
+				return callback(stale())
+			end
+			self:expand_all(callback)
+		end
+		if self.reconciling or self.reconcile_queued then
+			self.reconcile_waiters[#self.reconcile_waiters + 1] = resume
+		else
+			resume()
+		end
+	end
+	self.client:request("workspace/root", {}, function(request_error, result)
+		if not self:_valid(captured.generation, captured.epoch, captured.workspace) then
+			return callback(stale())
+		end
+		if request_error then
+			return callback(request_error)
+		end
+		if type(result) ~= "table" or result.revision ~= expected_revision then
+			self:_invalidate()
+			return retry_after_reconcile()
+		end
+		local snapshot = self:_root_snapshot(result, expected_revision)
+		if not snapshot or snapshot.revision ~= expected_revision then
+			return callback(stale())
+		end
+		snapshot.desired_expanded, snapshot.previous_nodes = nil, nil
+		local pending, position = vim.deepcopy(snapshot.roots), 1
+		local function next_node()
+			local id = pending[position]
+			position = position + 1
+			if not id then
+				local selected = self.selected_id
+				while selected and not snapshot.nodes[selected] do
+					local previous = self.nodes[selected]
+					selected = previous and previous.parent_id or nil
+				end
+				snapshot.selected_id = selected or snapshot.roots[1]
+				self.nodes, self.children, self.roots, self.expanded =
+					snapshot.nodes, snapshot.children, snapshot.roots, snapshot.expanded
+				self.selected_id = snapshot.selected_id
+				self.on_change(self)
+				return callback(nil, self)
+			end
+			if not expandable(snapshot.nodes[id]) then
+				return next_node()
+			end
+			snapshot.expanded[id] = true
+			self:_snapshot_children(snapshot, id, captured, function(err, ids, invalidated)
+				if err then
+					if invalidated then
+						return retry_after_reconcile()
+					end
+					return callback(err)
+				end
+				for _, child_id in ipairs(ids) do
+					if expandable(snapshot.nodes[child_id]) then
+						pending[#pending + 1] = child_id
+					end
+				end
+				next_node()
+			end)
+		end
+		next_node()
+	end)
+end
+
+function Workspace:collapse_all()
+	self.expanded = {}
+	self.on_change(self)
+end
+
 function Workspace:select(id)
 	if self.nodes[id] then
 		self.selected_id = id
@@ -542,10 +639,10 @@ function Workspace:has_capability(name)
 	return self.client:has_capability(name)
 end
 
-function Workspace:resolve_file(id, callback)
+function Workspace:_resolve_file(id, kinds, callback)
 	callback = callback or noop
 	local node = self.nodes[id]
-	if not node or (node.kind ~= "projectFile" and node.kind ~= "solutionItem") then
+	if not node or not kinds[node.kind] then
 		return callback(rpc.problem("not_openable", "The selected node is not an openable file."))
 	end
 	local generation, epoch, workspace_id = self.client.generation, self.epoch, self.workspace_id
@@ -568,9 +665,29 @@ function Workspace:resolve_file(id, callback)
 					rpc.problem("invalid_file_resolution", "The workspace file response is incompatible.")
 				)
 			end
+			if
+				node.kind == "project"
+				and not (
+					result.path:lower():match("%.csproj$")
+					or result.path:lower():match("%.fsproj$")
+					or result.path:lower():match("%.vbproj$")
+				)
+			then
+				return self.client:_terminate(
+					rpc.problem("invalid_file_resolution", "The workspace project path is incompatible.")
+				)
+			end
 			callback(nil, result.path)
 		end
 	)
+end
+
+function Workspace:resolve_file(id, callback)
+	self:_resolve_file(id, { projectFile = true, solutionItem = true }, callback)
+end
+
+function Workspace:resolve_project(id, callback)
+	self:_resolve_file(id, { project = true }, callback)
 end
 
 function Workspace:refresh(callback)

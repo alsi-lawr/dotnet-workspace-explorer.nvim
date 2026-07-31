@@ -61,6 +61,7 @@ local tree = setmetatable({
 	},
 	selected_id = "project-file",
 	phase = "ready",
+	git_enabled = false,
 }, { __index = Workspace })
 
 for _, node in pairs(nodes) do
@@ -191,6 +192,36 @@ assert(lines[5]:find(" Features", 1, true), "open project directory icon")
 assert(lines[7]:find(" Dependencies", 1, true), "dependency container icon")
 assert(lines[8]:find(" FSharp.Core (10.0.0)", 1, true), "NuGet Devicon")
 assert(not lines[6]:find("- ", 1, true), "file row omits the leaf prefix")
+
+tree.mark_mode, tree.marks = "move", { ["project-file"] = true }
+tree.decorations = { ["project-file"] = "added", project = "changed" }
+highlights = {}
+view.render(tree)
+lines = vim.api.nvim_buf_get_lines(view.buf, 0, -1, false)
+assert(lines[4]:match(" ~$"), "changed suffix follows project name")
+assert(lines[6]:match(" %[m%] %+$"), "Git suffix follows the mark suffix")
+local mark_highlight, added_highlight, changed_highlight
+for _, item in ipairs(highlights) do
+	if item[1] == "DotnetWorkspaceExplorerMark" then
+		mark_highlight = item
+	elseif item[1] == "DotnetWorkspaceExplorerGitAdded" then
+		added_highlight = item
+	elseif item[1] == "DotnetWorkspaceExplorerGitChanged" then
+		changed_highlight = item
+	end
+end
+assert(mark_highlight and added_highlight and changed_highlight, "mark and Git suffix highlights")
+assert_equal(
+	"DiffAdd",
+	vim.api.nvim_get_hl(0, { name = "DotnetWorkspaceExplorerGitAdded", link = true }).link,
+	"added suffix follows theme"
+)
+assert_equal(
+	"DiffChange",
+	vim.api.nvim_get_hl(0, { name = "DotnetWorkspaceExplorerGitChanged", link = true }).link,
+	"changed suffix follows theme"
+)
+tree.mark_mode, tree.marks, tree.decorations = nil, {}, {}
 
 local icon_range
 for _, item in ipairs(highlights) do
@@ -337,6 +368,48 @@ assert_equal(
 	"file activation opens the resolved path"
 )
 assert(view.is_open(), "file activation keeps the explorer open")
+
+local edit_notifications, saved_notify = 0, vim.notify
+vim.notify = function()
+	edit_notifications = edit_notifications + 1
+end
+resolved_id = nil
+select("project-file")
+explorer.edit()
+assert_equal(nil, resolved_id, "unsupported Edit sends no resolution request")
+assert_equal(1, edit_notifications, "unsupported Edit reports one error")
+vim.notify = saved_notify
+
+select("project")
+for _, extension in ipairs({ "csproj", "fsproj", "vbproj" }) do
+	local project_path = vim.fn.tempname() .. "." .. extension
+	vim.fn.writefile({ "<Project />" }, project_path)
+	function tree.resolve_project(_, id, callback)
+		resolved_id = id
+		callback(nil, project_path)
+	end
+	explorer.focus()
+	explorer.edit()
+	assert_equal("project", resolved_id, extension .. " Edit resolves the project node")
+	assert_equal(
+		original_window,
+		vim.api.nvim_get_current_win(),
+		extension .. " Edit uses previous editor"
+	)
+	assert_equal(
+		vim.fs.normalize(project_path),
+		vim.fs.normalize(vim.api.nvim_buf_get_name(0)),
+		extension .. " Edit opens core path"
+	)
+	assert(view.is_open(), extension .. " Edit keeps explorer open")
+	vim.fn.delete(project_path)
+end
+
+select("project-file-20")
+vim.api.nvim_win_call(view.win, function()
+	vim.cmd("normal! zt")
+end)
+saved_view = vim.api.nvim_win_call(view.win, vim.fn.winsaveview)
 explorer.refresh()
 assert_equal("project-file-20", tree.selected_id, "Refresh preserves deep selection")
 assert_equal(41, vim.api.nvim_win_get_width(view.win), "Refresh preserves explorer width")

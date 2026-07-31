@@ -11,6 +11,15 @@ local command_specs = {
 	{ name = "DotnetWorkspaceExplorerCollapse", action = "collapse", nargs = 0 },
 	{ name = "DotnetWorkspaceExplorerNew", action = "new", nargs = 0 },
 	{ name = "DotnetWorkspaceExplorerDelete", action = "delete", nargs = 0 },
+	{ name = "DotnetWorkspaceExplorerEdit", action = "edit", nargs = 0 },
+	{ name = "DotnetWorkspaceExplorerRename", action = "rename", nargs = 0 },
+	{ name = "DotnetWorkspaceExplorerMarkMove", action = "mark_move", nargs = 0 },
+	{ name = "DotnetWorkspaceExplorerMarkCopy", action = "mark_copy", nargs = 0 },
+	{ name = "DotnetWorkspaceExplorerPlace", action = "place", nargs = 0 },
+	{ name = "DotnetWorkspaceExplorerClearMarks", action = "clear_marks", nargs = 0 },
+	{ name = "DotnetWorkspaceExplorerExpandAll", action = "expand_all", nargs = 0 },
+	{ name = "DotnetWorkspaceExplorerCollapseAll", action = "collapse_all", nargs = 0 },
+	{ name = "DotnetWorkspaceExplorerGitRefresh", action = "git_refresh", nargs = 0 },
 }
 
 local function callback(action, accepts_argument)

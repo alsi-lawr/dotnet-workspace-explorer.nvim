@@ -11,6 +11,9 @@ local links = {
 	Dependency = "Constant",
 	DependencyProperty = "Comment",
 	File = "Normal",
+	Mark = "Special",
+	GitAdded = "DiffAdd",
+	GitChanged = "DiffChange",
 }
 local kinds = {
 	workspace = { glyph = "solution", group = "Solution", devicon = "workspace.slnx" },
@@ -268,13 +271,33 @@ function M.render(tree)
 		local icon_start = #prefix
 		local separator = icon ~= "" and " " or ""
 		local name_start = icon_start + #icon + #separator
-		lines[#lines + 1] = prefix .. icon .. separator .. name
+		local line = prefix .. icon .. separator .. name
 		if icon ~= "" then
 			highlights[#highlights + 1] =
 				span(icon_group or "DotnetWorkspaceExplorer" .. kind.group, icon_start, icon_start + #icon)
 		end
 		highlights[#highlights + 1] =
 			span("DotnetWorkspaceExplorer" .. kind.group, name_start, name_start + #name)
+		if tree.marks and tree.marks[id] then
+			local suffix = tree.mark_mode == "move" and " [m]" or " [c]"
+			local mark_start = #line
+			line = line .. suffix
+			highlights[#highlights + 1] =
+				span("DotnetWorkspaceExplorerMark", mark_start, mark_start + #suffix)
+		end
+		local decoration = tree.decorations and tree.decorations[id]
+		if decoration then
+			local suffix = decoration == "added" and " +" or " ~"
+			local decoration_start = #line
+			line = line .. suffix
+			highlights[#highlights + 1] = span(
+				decoration == "added" and "DotnetWorkspaceExplorerGitAdded"
+					or "DotnetWorkspaceExplorerGitChanged",
+				decoration_start,
+				decoration_start + #suffix
+			)
+		end
+		lines[#lines + 1] = line
 		rows[#rows + 1] = {
 			id = id,
 			depth = depth,

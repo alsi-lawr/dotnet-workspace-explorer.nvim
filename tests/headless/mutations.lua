@@ -287,6 +287,21 @@ end
 do
 	local state = run({
 		responses = {
+			["workspace/commands/preview"] = function(_, callback)
+				local result = preview("Create")
+				result.effects[1].operation = "copy"
+				callback(nil, result)
+			end,
+		},
+	})
+	assert_equal(3, #state.calls, "unknown preview effect stops before confirmation")
+	assert_equal("incompatible_preview", state.errors[1].code, "unknown preview effect")
+	assert_equal({}, state.refreshes, "unknown preview effect does not reconcile")
+end
+
+do
+	local state = run({
+		responses = {
 			["workspace/commands/execute"] = function(_, callback)
 				callback(nil, { applied = false, revision = 8 })
 			end,
@@ -366,6 +381,22 @@ do
 	state.controller:notification("workspace/operations/completed", malformed)
 	assert_equal({}, state.refreshes, "malformed matching completion refresh")
 	assert_equal("incompatible_completion", state.errors[1].code, "completion validation")
+end
+
+do
+	local state = run({ pick = 2 })
+	local malformed =
+		completion("operation-1", "failed", { diagnostic("template_failed", "Core failed") })
+	malformed.diagnostics[1].detail = "unexpected"
+	state.controller:notification("workspace/operations/completed", malformed)
+	assert_equal({}, state.refreshes, "malformed diagnostic does not reconcile")
+	assert_equal("incompatible_completion", state.errors[1].code, "diagnostic exact-key validation")
+	state.controller:notification(
+		"workspace/operations/completed",
+		completion("operation-1", "succeeded")
+	)
+	assert_equal({}, state.refreshes, "malformed diagnostic consumes the pending operation")
+	assert_equal(1, #state.errors, "later completion for consumed operation is ignored")
 end
 
 do

@@ -162,12 +162,24 @@ local function compatible_options(result, revision)
 	return true
 end
 
+local effect_operations = {
+	create = true,
+	modify = true,
+	trash = true,
+	addToProject = true,
+	removeFromProject = true,
+	addToSolution = true,
+	removeFromSolution = true,
+}
+
 local function compatible_effect(value)
 	return exact_keys(value, {
 		operation = true,
 		target = true,
 		recursive = true,
-	}) and nonempty(value.operation) and nonempty(value.target) and type(value.recursive) == "boolean"
+	}) and effect_operations[value.operation] == true and nonempty(value.target) and type(
+		value.recursive
+	) == "boolean"
 end
 
 local function compatible_preview(result)
@@ -208,7 +220,14 @@ end
 
 local function compatible_diagnostic(value, workspace_id, revision)
 	if
-		not map(value)
+		not exact_keys(value, {
+			workspaceId = true,
+			revision = true,
+			severity = true,
+			code = true,
+			message = true,
+			retryable = true,
+		})
 		or value.workspaceId ~= workspace_id
 		or value.revision ~= revision
 		or not nonempty(value.severity)

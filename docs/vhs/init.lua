@@ -21,11 +21,17 @@ vim.ui.input = function(options, callback)
 	callback(value)
 end
 
-vim.ui.select = function(_, options, callback)
+vim.ui.select = function(items, options, callback)
+	local labels = {}
+	for index, item in ipairs(items) do
+		labels[index] = type(item) == "table" and item.displayName or tostring(item)
+	end
 	vim.fn.inputsave()
-	local choice = vim.fn.input((options.prompt or "Select") .. " [Create/Cancel]: ")
+	local choice = tonumber(
+		vim.fn.input((options.prompt or "Select") .. " [" .. table.concat(labels, "/") .. "]: ")
+	)
 	vim.fn.inputrestore()
-	callback(choice == "Create" and "Create" or "Cancel")
+	callback(items[choice])
 end
 
 local explorer = require("dotnet-workspace-explorer")
@@ -42,7 +48,8 @@ explorer.setup({
 		activate = "<CR>",
 		collapse = "h",
 		expand = "l",
-		add_file = "a",
+		new = "a",
+		delete = "d",
 		refresh = "R",
 		close = "q",
 	},

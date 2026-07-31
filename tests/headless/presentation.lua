@@ -211,7 +211,7 @@ for index = 1, 30 do
 	project_files[#project_files + 1] = id
 end
 
-local factory_options, requests
+local factory_options
 tree.children["project-folder"] = project_files
 tree.selected_id, tree.revision = "project-file-20", 7
 function tree:start(callback)
@@ -233,25 +233,6 @@ function tree:refresh(callback)
 	end
 	callback()
 end
-function tree.request(_, method, parameters, callback)
-	requests[#requests + 1] = { method = method, parameters = vim.deepcopy(parameters) }
-	if method == "workspace/commands/describe" then
-		callback(nil, {
-			command = {
-				id = "project.item.new",
-				access = "write",
-				targetKinds = { "project" },
-				parameters = {
-					{ id = "path", type = "path", required = true },
-					{ id = "itemType", type = "choice", required = true },
-				},
-			},
-		})
-	elseif method == "workspace/commands/preview" then
-		callback(nil, { confirmationToken = "preview-token" })
-	end
-end
-
 package.loaded["dotnet-workspace-explorer"] = nil
 package.loaded["dotnet-workspace-explorer.workspace"] = {
 	Workspace = {
@@ -311,16 +292,5 @@ assert_equal("project-folder", tree.selected_id, "missing descendant selects nea
 tree.on_refresh = nil
 tree.children["project-folder"] = project_files
 factory_options.on_change(tree)
-vim.ui.select = function(_, _, callback)
-	callback("Cancel")
-end
-for _, id in ipairs({ "project-folder", "project-file", "dependencies", "dependency" }) do
-	requests = {}
-	select(id)
-	explorer.add_file("Added.fs")
-	assert_equal(2, #requests, id .. " AddFile request count")
-	assert_equal("project", requests[1].parameters.targetNodeId, id .. " describe project target")
-	assert_equal("project", requests[2].parameters.targetNodeId, id .. " preview project target")
-end
 
-print("DWE-007 presentation probe passed")
+print("DWE presentation probe passed")

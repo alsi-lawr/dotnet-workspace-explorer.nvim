@@ -363,6 +363,21 @@ function Workspace:refresh(callback)
 	)
 end
 
+function Workspace:mutation_completed(revision)
+	local generation, workspace_id = self.client.generation, self.workspace_id
+	vim.schedule(function()
+		if
+			self.client.generation == generation
+			and not self.client.inert
+			and self.workspace_id == workspace_id
+			and self.revision < revision
+			and not self.reconciling
+		then
+			self:_invalidate()
+		end
+	end)
+end
+
 function Workspace:stop(reason, force)
 	self.epoch, self.phase = self.epoch + 1, "stopped"
 	self.client:stop(reason, force)

@@ -7,15 +7,18 @@ local capabilities = {
 	"workspace.refresh",
 	"workspace.delta",
 	"workspace.reset",
+	"workspace.create.options",
 	"workspace.commands.list",
 	"workspace.commands.describe",
 	"workspace.commands.preview",
 	"workspace.commands.execute",
+	"workspace.operations.completed",
 }
 local method_capabilities = {
 	["workspace/root"] = "workspace.root",
 	["workspace/children"] = "workspace.children",
 	["workspace/refresh"] = "workspace.refresh",
+	["workspace/create/options"] = "workspace.create.options",
 	["workspace/commands/list"] = "workspace.commands.list",
 	["workspace/commands/describe"] = "workspace.commands.describe",
 	["workspace/commands/preview"] = "workspace.commands.preview",

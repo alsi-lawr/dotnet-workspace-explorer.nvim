@@ -2,10 +2,11 @@ local M = {}
 
 local mapping_names = {
 	activate = true,
-	add_file = true,
 	close = true,
 	collapse = true,
+	delete = true,
 	expand = true,
+	new = true,
 	refresh = true,
 }
 
@@ -33,14 +34,10 @@ local function defaults()
 			activate = "<CR>",
 			collapse = "h",
 			expand = "l",
-			add_file = "a",
+			new = "a",
+			delete = "d",
 			refresh = "R",
 			close = "q",
-		},
-		actions = {
-			add_file = {
-				item_type = "Compile",
-			},
 		},
 	}
 end
@@ -99,7 +96,6 @@ local function validate_input(options)
 		width = true,
 		glyphs = true,
 		mappings = true,
-		actions = true,
 	}, "options")
 
 	if options.presentation ~= nil then
@@ -123,15 +119,6 @@ local function validate_input(options)
 	if options.mappings ~= nil and options.mappings ~= false then
 		ensure_table(options.mappings, "mappings")
 		ensure_known_keys(options.mappings, mapping_names, "mappings")
-	end
-
-	if options.actions ~= nil then
-		ensure_table(options.actions, "actions")
-		ensure_known_keys(options.actions, { add_file = true }, "actions")
-		if options.actions.add_file ~= nil then
-			ensure_table(options.actions.add_file, "actions.add_file")
-			ensure_known_keys(options.actions.add_file, { item_type = true }, "actions.add_file")
-		end
 	end
 end
 
@@ -167,11 +154,6 @@ local function validate(options)
 				fail("mappings." .. name .. " must be a non-empty string or false")
 			end
 		end
-	end
-
-	local item_type = options.actions.add_file.item_type
-	if type(item_type) ~= "string" or item_type == "" then
-		fail("actions.add_file.item_type must be a non-empty string")
 	end
 end
 

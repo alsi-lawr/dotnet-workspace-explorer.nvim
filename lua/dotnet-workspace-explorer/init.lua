@@ -1,9 +1,10 @@
 local config = require("dotnet-workspace-explorer.config")
+local Mutations = require("dotnet-workspace-explorer.mutations").Mutations
 local view = require("dotnet-workspace-explorer.view")
 local Workspace = require("dotnet-workspace-explorer.workspace").Workspace
 
 local M = {}
-local tree, target, initial_failed, terminal_failed, has_good
+local tree, mutations, target, initial_failed, terminal_failed, has_good
 local function fail(err)
 	if err then
 		view.failure(err)
@@ -11,6 +12,9 @@ local function fail(err)
 end
 
 local function start(resolved, retain_tree)
+	if mutations then
+		mutations:invalidate()
+	end
 	if tree then
 		tree:stop("session_replaced", true)
 	end
@@ -19,7 +23,7 @@ local function start(resolved, retain_tree)
 		has_good = false
 		view.loading()
 	end
-	local current, loaded
+	local current, current_mutations, loaded
 	current = Workspace.new({
 		command = config.get().command,
 		target = target,
@@ -35,8 +39,28 @@ local function start(resolved, retain_tree)
 				fail(err)
 			end
 		end,
+		on_notification = function(method, parameters)
+			if current == tree and current_mutations == mutations then
+				current_mutations:notification(method, parameters)
+			end
+		end,
 	})
-	tree = current
+	current_mutations = Mutations.new({
+		workspace = current,
+		is_live = function()
+			return current == tree and current_mutations == mutations
+		end,
+		selected = function()
+			return view.selected(current)
+		end,
+		on_error = fail,
+		on_refresh = function(revision)
+			if current == tree and current_mutations == mutations then
+				current:mutation_completed(revision)
+			end
+		end,
+	})
+	tree, mutations = current, current_mutations
 	tree:start(function(err)
 		if err and current == tree then
 			initial_failed, terminal_failed = not loaded, current:is_terminal()
@@ -70,10 +94,13 @@ end
 
 function M.close()
 	view.close()
+	if mutations then
+		mutations:invalidate()
+	end
 	if tree then
 		tree:stop("explorer_closed")
 	end
-	tree, target, initial_failed, terminal_failed, has_good = nil, nil, nil, nil, nil
+	tree, mutations, target, initial_failed, terminal_failed, has_good = nil, nil, nil, nil, nil, nil
 end
 
 function M.toggle(requested)
@@ -129,143 +156,18 @@ function M.activate()
 	end)
 end
 
-local command_id = "project.item.new"
-local function compatible_descriptor(result)
-	local descriptor = type(result) == "table" and result.command
-	if
-		type(descriptor) ~= "table"
-		or descriptor.id ~= command_id
-		or descriptor.access ~= "write"
-		or type(descriptor.parameters) ~= "table"
-		or not vim.islist(descriptor.parameters)
-		or type(descriptor.targetKinds) ~= "table"
-		or not vim.islist(descriptor.targetKinds)
-	then
-		return
+function M.new()
+	if not mutations then
+		return fail({ message = "Open the workspace explorer before creating an item." })
 	end
-	local required, targets = {}, {}
-	for _, parameter in ipairs(descriptor.parameters) do
-		if
-			type(parameter) ~= "table"
-			or type(parameter.id) ~= "string"
-			or type(parameter.type) ~= "string"
-			or type(parameter.required) ~= "boolean"
-		then
-			return
-		end
-		if parameter.required then
-			required[parameter.id] = parameter.type
-		end
-	end
-	for _, kind in ipairs(descriptor.targetKinds) do
-		targets[kind] = true
-	end
-	return targets.project
-		and required.path == "path"
-		and required.itemType == "choice"
-		and vim.tbl_count(required) == 2
-		and descriptor
+	mutations:create()
 end
 
-local function project_for(id)
-	while id do
-		local node = tree:get_node(id)
-		if node and node.kind == "project" then
-			return id
-		end
-		id = tree:parent(id)
+function M.delete()
+	if not mutations then
+		return fail({ message = "Open the workspace explorer before deleting an item." })
 	end
-end
-
-local function create_file(path)
-	if type(path) ~= "string" or path == "" then
-		return
-	end
-	if not tree then
-		return fail({ message = "Open the workspace explorer before adding a file." })
-	end
-	local session, project = tree, project_for(view.selected(tree))
-	if not project then
-		return fail({ message = "Select a project before adding a file." })
-	end
-	for _, capability in ipairs({
-		"workspace.commands.describe",
-		"workspace.commands.preview",
-		"workspace.commands.execute",
-	}) do
-		if not session:has_capability(capability) then
-			return fail({ message = "The workspace does not support adding project items." })
-		end
-	end
-	session:request("workspace/commands/describe", {
-		commandId = command_id,
-		targetNodeId = project,
-	}, function(describe_error, result)
-		if describe_error then
-			return fail(describe_error)
-		end
-		local descriptor = compatible_descriptor(result)
-		if not descriptor then
-			return fail({ message = "The add-file command descriptor is incompatible." })
-		end
-		local captured = {
-			descriptor = descriptor,
-			request = {
-				commandId = command_id,
-				targetNodeId = project,
-				arguments = {
-					path = path,
-					itemType = config.get().actions.add_file.item_type,
-				},
-				expectedRevision = session.revision,
-			},
-		}
-		session:request("workspace/commands/preview", captured.request, function(preview_error, preview)
-			if preview_error then
-				return fail(preview_error)
-			end
-			local token = type(preview) == "table" and preview.confirmationToken
-			if type(token) ~= "string" or token == "" then
-				return fail({ message = "The add-file preview is incompatible." })
-			end
-			vim.ui.select({ "Create", "Cancel" }, { prompt = "Create " .. path .. "?" }, function(choice)
-				if choice ~= "Create" then
-					return
-				end
-				local execute = vim.deepcopy(captured.request)
-				execute.confirmationToken = token
-				session:request("workspace/commands/execute", execute, function(execute_error, applied)
-					if execute_error then
-						return fail(execute_error)
-					end
-					if
-						type(applied) ~= "table"
-						or applied.applied ~= true
-						or type(applied.revision) ~= "number"
-						or applied.revision < 0
-						or applied.revision % 1 ~= 0
-					then
-						return fail({ message = "The add-file result is incompatible." })
-					end
-					if session == tree then
-						M.refresh()
-					end
-				end)
-			end)
-		end)
-	end)
-end
-
-function M.add_file(path)
-	if not tree then
-		return fail({ message = "Open the workspace explorer before adding a file." })
-	end
-	if path ~= nil then
-		return create_file(path)
-	end
-	vim.ui.input({ prompt = "Solution-relative or absolute path: " }, function(value)
-		create_file(value)
-	end)
+	mutations:delete()
 end
 
 function M._register_commands()

@@ -9,7 +9,8 @@ local command_specs = {
 	{ name = "DotnetWorkspaceExplorerActivate", action = "activate", nargs = 0 },
 	{ name = "DotnetWorkspaceExplorerExpand", action = "expand", nargs = 0 },
 	{ name = "DotnetWorkspaceExplorerCollapse", action = "collapse", nargs = 0 },
-	{ name = "DotnetWorkspaceExplorerAddFile", action = "add_file", nargs = "?" },
+	{ name = "DotnetWorkspaceExplorerNew", action = "new", nargs = 0 },
+	{ name = "DotnetWorkspaceExplorerDelete", action = "delete", nargs = 0 },
 }
 
 local function callback(action, accepts_argument)

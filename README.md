@@ -71,23 +71,23 @@ Or pass a specific `.sln`, `.slnx`, or read-only `.slnf` target:
 :DotnetWorkspaceExplorerOpen /path/to/Demo.slnx
 ```
 
-The explorer opens on the left by default. Use `<CR>` or `l` to expand, `h` to collapse, `a` to add
-a file to the selected project, `R` to refresh, and `q` to close. All actions are also commands, and
-every mapping can be replaced or disabled.
+The explorer opens on the left by default. Use `<CR>` or `l` to expand, `h` to collapse, `a` for
+contextual creation, `d` for contextual deletion, `R` to refresh, and `q` to close. All actions are
+also commands, and every mapping can be replaced or disabled.
 
 ## Why this explorer
 
 - **Solution-aware:** the .NET core owns the hierarchy rather than asking Lua to infer it.
 - **Theme-native:** semantic highlights follow the active colorscheme; Devicons are optional.
 - **Editor-native:** the explorer is an ordinary split with normal Neovim scrolling and movement.
-- **Mutation-safe:** file creation is previewed, explicitly confirmed, and applied by the core.
+- **Mutation-safe:** creation and deletion are fully previewed, explicitly confirmed, and applied
+  by the core.
 
 ## Documentation
 
 - [Getting started](../../wiki/Getting-Started)
 - [Configuration](../../wiki/Configuration)
 - [Commands and mappings](../../wiki/Commands-and-Mappings)
-- [Adding files](../../wiki/Adding-Files)
 - [Recovery and limitations](../../wiki/Recovery-and-Limitations)
 
 ## Status

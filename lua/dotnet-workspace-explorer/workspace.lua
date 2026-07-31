@@ -69,6 +69,17 @@ local function normalize_node(value, workspace_id, revision, parent_id)
 	}
 end
 
+local function expandable(node)
+	return node
+		and (
+			node.kind == "workspace"
+			or node.kind == "solutionFolder"
+			or node.kind == "project"
+			or node.kind == "projectFolder"
+			or node.kind == "dependencyContainer"
+		)
+end
+
 function Workspace.new(options)
 	local self = setmetatable({
 		nodes = {},
@@ -78,6 +89,7 @@ function Workspace.new(options)
 		expanded = {},
 		epoch = 0,
 		phase = "idle",
+		reconcile_waiters = {},
 		on_change = options.on_change or noop,
 		on_error = options.on_error or noop,
 		on_notification = options.on_notification or noop,
@@ -117,7 +129,7 @@ function Workspace:_normalize_nodes(values, parent_id, revision, existing)
 	return nodes, ids
 end
 
-function Workspace:_apply_root(result, expected_revision)
+function Workspace:_root_snapshot(result, expected_revision)
 	if
 		type(result) ~= "table"
 		or type(result.revision) ~= "number"
@@ -130,60 +142,190 @@ function Workspace:_apply_root(result, expected_revision)
 	end
 	local nodes, roots = self:_normalize_nodes(result.nodes, nil, result.revision, {})
 	if not nodes then
-		return false
+		return nil
 	end
-	local previous_expanded, previous_selected = self.expanded, self.selected_id
-	self.nodes, self.children, self.roots, self.expanded = {}, {}, roots, {}
+	local snapshot = {
+		nodes = {},
+		children = {},
+		roots = roots,
+		expanded = {},
+		desired_expanded = self.expanded,
+		previous_nodes = self.nodes,
+		revision = result.revision,
+		selected_id = self.selected_id,
+	}
 	for _, node in ipairs(nodes) do
-		self.nodes[node.id] = node
-		if previous_expanded[node.id] then
-			self.expanded[node.id] = true
+		snapshot.nodes[node.id] = node
+	end
+	return snapshot
+end
+
+function Workspace:_snapshot_children(snapshot, id, captured, callback)
+	local collected, token, seen_tokens = {}, nil, {}
+	local function page()
+		local parameters = { parentNodeId = id, pageSize = self.client.limits.maxPageSize }
+		if token then
+			parameters.continuationToken = token
+		end
+		self.client:request("workspace/children", parameters, function(request_error, result)
+			if not self:_valid(captured.generation, captured.epoch, captured.workspace) then
+				return callback(stale(), nil, true)
+			end
+			if request_error then
+				if request_error.code == "workspace_conflict" then
+					self:_invalidate()
+					return callback(request_error, nil, true)
+				end
+				return callback(request_error)
+			end
+			if
+				type(result) ~= "table"
+				or result.revision ~= snapshot.revision
+				or result.parentNodeId ~= id
+				or type(result.nodes) ~= "table"
+				or not vim.islist(result.nodes)
+			then
+				self:_invalidate()
+				return callback(stale(), nil, true)
+			end
+			for _, child in ipairs(result.nodes) do
+				collected[#collected + 1] = child
+			end
+			token = result.nextToken
+			if token ~= nil then
+				if type(token) ~= "string" or token == "" or seen_tokens[token] then
+					local reason = rpc.problem("invalid_tree", "The children continuation is invalid.")
+					self.client:_terminate(reason)
+					return callback(reason)
+				end
+				seen_tokens[token] = true
+				return page()
+			end
+			local nodes, ids = self:_normalize_nodes(collected, id, snapshot.revision, snapshot.nodes)
+			if not nodes then
+				local reason = rpc.problem("invalid_tree", "The workspace children response is invalid.")
+				self.client:_terminate(reason)
+				return callback(reason)
+			end
+			for _, node in ipairs(nodes) do
+				snapshot.nodes[node.id] = node
+			end
+			snapshot.children[id] = ids
+			callback(nil, ids)
+		end)
+	end
+	page()
+end
+
+function Workspace:_restore_snapshot(snapshot, captured, callback)
+	local pending, position = {}, 1
+	for _, id in ipairs(snapshot.roots) do
+		if snapshot.desired_expanded[id] and expandable(snapshot.nodes[id]) then
+			pending[#pending + 1] = id
 		end
 	end
-	self.revision = result.revision
-	self.selected_id = self.nodes[previous_selected] and previous_selected or roots[1]
-	return true
+	local function complete()
+		local selected = snapshot.selected_id
+		while selected and not snapshot.nodes[selected] do
+			local previous = snapshot.previous_nodes[selected]
+			selected = previous and previous.parent_id or nil
+		end
+		snapshot.selected_id = selected or snapshot.roots[1]
+		snapshot.desired_expanded, snapshot.previous_nodes = nil, nil
+		callback(nil, snapshot)
+	end
+	local function restore_next()
+		local id = pending[position]
+		position = position + 1
+		if not id then
+			return complete()
+		end
+		snapshot.expanded[id] = true
+		self:_snapshot_children(snapshot, id, captured, function(err, ids, invalidated)
+			if err then
+				return callback(err, nil, invalidated)
+			end
+			for _, child_id in ipairs(ids) do
+				if snapshot.desired_expanded[child_id] and expandable(snapshot.nodes[child_id]) then
+					pending[#pending + 1] = child_id
+				end
+			end
+			restore_next()
+		end)
+	end
+	restore_next()
+end
+
+function Workspace:_finish_reconcile(err)
+	local waiters = self.reconcile_waiters
+	self.reconcile_waiters = {}
+	for _, waiter in ipairs(waiters) do
+		waiter(err, err and nil or self)
+	end
+end
+
+function Workspace:_restart_reconcile()
+	self.reconciling = false
+	if self.reconcile_queued and not self.client.inert then
+		self:_reconcile()
+	end
 end
 
 function Workspace:_reconcile(callback, retry)
+	if callback then
+		self.reconcile_waiters[#self.reconcile_waiters + 1] = callback
+	end
 	if self.reconciling then
-		self.reconcile_queued = true
 		return
 	end
 	self.reconciling, self.reconcile_queued = true, false
-	local captured_generation, captured_epoch = self.client.generation, self.epoch
-	local captured_workspace, expected_revision = self.workspace_id, self.revision
+	local captured = {
+		generation = self.client.generation,
+		epoch = self.epoch,
+		workspace = self.workspace_id,
+	}
+	local expected_revision = self.revision
 	self.client:request("workspace/root", {}, function(request_error, result)
-		if not self:_valid(captured_generation, captured_epoch, captured_workspace) then
-			self.reconciling = false
-			if self.reconcile_queued and not self.client.inert then
-				self:_reconcile()
-			end
-			return
+		if not self:_valid(captured.generation, captured.epoch, captured.workspace) then
+			return self:_restart_reconcile()
 		end
-		self.reconciling = false
 		if request_error then
+			self.reconciling = false
 			self.phase = "failed"
 			self.on_error(request_error)
-			if callback then
-				callback(request_error)
-			end
+			self:_finish_reconcile(request_error)
 			return
 		end
-		if not self:_apply_root(result, expected_revision) then
+		local snapshot = self:_root_snapshot(result, expected_revision)
+		if not snapshot then
+			self.reconciling = false
 			if not retry then
 				self.epoch = self.epoch + 1
-				return self:_reconcile(callback, true)
+				return self:_reconcile(nil, true)
 			end
-			return self.client:_terminate(
-				rpc.problem("invalid_tree", "The workspace root response is incompatible.")
-			)
+			local reason = rpc.problem("invalid_tree", "The workspace root response is incompatible.")
+			self.client:_terminate(reason)
+			return self:_finish_reconcile(reason)
 		end
-		self.phase = "ready"
-		self.on_change(self)
-		if callback then
-			callback(nil, self)
-		end
+		self:_restore_snapshot(snapshot, captured, function(restore_error, restored, invalidated)
+			if invalidated then
+				return self:_restart_reconcile()
+			end
+			self.reconciling = false
+			if restore_error then
+				self.phase = "failed"
+				if not self.client.inert then
+					self.on_error(restore_error)
+				end
+				return self:_finish_reconcile(restore_error)
+			end
+			self.nodes, self.children, self.roots, self.expanded =
+				restored.nodes, restored.children, restored.roots, restored.expanded
+			self.revision, self.selected_id = restored.revision, restored.selected_id
+			self.phase = "ready"
+			self.on_change(self)
+			self:_finish_reconcile()
+		end)
 	end)
 end
 
@@ -218,7 +360,7 @@ function Workspace:start(callback)
 	end)
 end
 
-function Workspace:expand(id, callback)
+function Workspace:expand(id, callback, retried)
 	callback = callback or noop
 	if not self.nodes[id] then
 		return callback(rpc.problem("unknown_node", "The node no longer exists."))
@@ -235,6 +377,11 @@ function Workspace:expand(id, callback)
 	end
 	local waiters = { callback }
 	self.loading[id] = waiters
+	local function deliver(err, result)
+		for _, waiter in ipairs(waiters) do
+			waiter(err, result)
+		end
+	end
 	local function restore_expansion()
 		if self.expanded[id] then
 			self.expanded[id] = previous_expanded
@@ -244,8 +391,35 @@ function Workspace:expand(id, callback)
 		if self.loading[id] == waiters then
 			self.loading[id] = nil
 		end
-		for _, waiter in ipairs(waiters) do
-			waiter(err, result)
+		deliver(err, result)
+	end
+	local function retry_after_reconcile()
+		local function resume(err)
+			if err then
+				restore_expansion()
+				return finish(err)
+			end
+			if not self.nodes[id] then
+				restore_expansion()
+				return finish(rpc.problem("unknown_node", "The node no longer exists."))
+			end
+			if not self.expanded[id] or self.children[id] then
+				return finish(nil, self.children[id])
+			end
+			if self.loading[id] == waiters then
+				self.loading[id] = nil
+			end
+			self:expand(id, function(retry_error, result)
+				if retry_error then
+					restore_expansion()
+				end
+				deliver(retry_error, result)
+			end, true)
+		end
+		if self.reconciling or self.reconcile_queued then
+			self.reconcile_waiters[#self.reconcile_waiters + 1] = resume
+		else
+			resume()
 		end
 	end
 	local captured_generation, captured_epoch = self.client.generation, self.epoch
@@ -258,9 +432,23 @@ function Workspace:expand(id, callback)
 		end
 		self.client:request("workspace/children", parameters, function(request_error, result)
 			if not self:_valid(captured_generation, captured_epoch, captured_workspace) then
+				if
+					not retried
+					and self.client.generation == captured_generation
+					and not self.client.inert
+					and self.workspace_id == captured_workspace
+					and self.nodes[id]
+					and self.expanded[id]
+				then
+					return retry_after_reconcile()
+				end
 				return finish(stale())
 			end
 			if request_error then
+				if request_error.code == "workspace_conflict" and not retried then
+					self:_invalidate()
+					return retry_after_reconcile()
+				end
 				restore_expansion()
 				if request_error.code == "workspace_conflict" then
 					self:_invalidate()
@@ -274,8 +462,11 @@ function Workspace:expand(id, callback)
 				or type(result.nodes) ~= "table"
 				or not vim.islist(result.nodes)
 			then
-				restore_expansion()
 				self:_invalidate()
+				if not retried then
+					return retry_after_reconcile()
+				end
+				restore_expansion()
 				return finish(stale())
 			end
 			for _, child in ipairs(result.nodes) do
@@ -335,15 +526,7 @@ function Workspace:children_of(id)
 end
 
 function Workspace:is_expandable(id)
-	local node = self.nodes[id]
-	return node
-		and (
-			node.kind == "workspace"
-			or node.kind == "solutionFolder"
-			or node.kind == "project"
-			or node.kind == "projectFolder"
-			or node.kind == "dependencyContainer"
-		)
+	return expandable(self.nodes[id])
 end
 
 function Workspace:is_terminal()

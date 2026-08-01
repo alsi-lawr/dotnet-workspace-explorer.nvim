@@ -75,7 +75,7 @@ end
 
 local function harness(options)
 	options = options or {}
-	local calls, errors, refreshes, selections, inputs = {}, {}, {}, {}, {}
+	local calls, errors, refreshes, selections, inputs, add_existing = {}, {}, {}, {}, {}, {}
 	local capabilities = {
 		["workspace.create.options"] = true,
 		["workspace.commands.describe"] = true,
@@ -95,7 +95,7 @@ local function harness(options)
 		return capabilities[name] == true
 	end
 	workspace.get_node = function(_, id)
-		return id == "selected-node" and { id = id, kind = "projectFile" } or nil
+		return id == "selected-node" and { id = id, kind = options.target_kind or "projectFile" } or nil
 	end
 	workspace.request = function(_, method, parameters, callback)
 		calls[#calls + 1] = { method = method, parameters = vim.deepcopy(parameters) }
@@ -137,6 +137,9 @@ local function harness(options)
 		on_refresh = function(revision)
 			refreshes[#refreshes + 1] = revision
 		end,
+		on_add_existing = function(request)
+			add_existing[#add_existing + 1] = vim.deepcopy(request)
+		end,
 	})
 
 	local original_select, original_input = vim.ui.select, vim.ui.input
@@ -176,6 +179,7 @@ local function harness(options)
 		refreshes = refreshes,
 		selections = selections,
 		inputs = inputs,
+		add_existing = add_existing,
 		set_live = function(value)
 			live = value
 		end,
@@ -190,6 +194,92 @@ local function run(options, action)
 	state.controller[action or "create"](state.controller)
 	state.restore()
 	return state
+end
+
+do
+	local option = {
+		selectionId = "add-token",
+		kind = "addExisting",
+		displayName = "This label is not authoritative",
+		description = "Browse",
+		execution = "transaction",
+	}
+	local state = run({
+		target_kind = "project",
+		capabilities = { ["workspace.addExisting.selector"] = true },
+		responses = {
+			["workspace/create/options"] = function(_, callback)
+				callback(nil, { revision = 7, options = { option } })
+			end,
+		},
+	})
+	assert_equal(0, #state.inputs, "addExisting is discriminated without a name prompt")
+	assert_equal(1, #state.calls, "addExisting routes without command preview")
+	assert_equal({
+		selection_id = "add-token",
+		target_id = "selected-node",
+		target_kind = "project",
+		revision = 7,
+	}, state.add_existing[1], "addExisting routes only its kind and opaque identifiers")
+end
+
+do
+	local state = run({
+		target_kind = "project",
+		capabilities = { ["workspace.addExisting.selector"] = false },
+		responses = {
+			["workspace/create/options"] = function(_, callback)
+				callback(nil, {
+					revision = 7,
+					options = {
+						{
+							selectionId = "add-token",
+							kind = "addExisting",
+							displayName = "Add Existing",
+							description = "",
+							execution = "transaction",
+						},
+					},
+				})
+			end,
+		},
+	})
+	assert_equal("incompatible_options", state.errors[1].code, "unnegotiated option is rejected")
+	assert_equal({}, state.add_existing, "unnegotiated option cannot open selector")
+end
+
+do
+	local state = run({
+		target_kind = "workspace",
+		name = "Logical",
+		responses = {
+			["workspace/create/options"] = function(_, callback)
+				callback(nil, {
+					revision = 7,
+					options = {
+						{
+							selectionId = "folder-token",
+							kind = "solutionFolder",
+							displayName = "Logical folder",
+							description = "",
+							execution = "transaction",
+						},
+					},
+				})
+			end,
+			["workspace/commands/describe"] = function(_, callback)
+				local result = create_descriptor()
+				result.command.targetKinds = { "workspace" }
+				callback(nil, result)
+			end,
+		},
+	})
+	assert_equal({ prompt = "Logical folder name: " }, state.inputs[1], "solution folder name flow")
+	assert_equal({
+		selectionId = "folder-token",
+		name = "Logical",
+	}, state.calls[3].parameters.arguments, "solution folder uses exact workspace.create arguments")
+	assert_equal({}, state.add_existing, "solution folder never enters selector")
 end
 
 do
@@ -468,6 +558,10 @@ do
 		requested[capability] = true
 	end
 	assert(requested["workspace.create.options"], "creation-options capability was not requested")
+	assert(
+		requested["workspace.addExisting.selector"],
+		"Add Existing selector capability was not requested"
+	)
 	assert(
 		requested["workspace.operations.completed"],
 		"operation-completion capability was not requested"

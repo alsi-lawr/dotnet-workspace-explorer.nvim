@@ -269,7 +269,7 @@ end
 
 function Workspace:_restart_reconcile()
 	self.reconciling = false
-	if self.reconcile_queued and not self.client.inert then
+	if self.reconcile_queued and not self.reconciliation_deferred and not self.client.inert then
 		self:_reconcile()
 	end
 end
@@ -334,16 +334,40 @@ end
 
 function Workspace:_invalidate()
 	self.epoch, self.reconcile_queued = self.epoch + 1, true
-	if not self.reconciling then
+	if not self.reconciling and not self.reconciliation_deferred then
 		self:_reconcile()
 	end
 end
 
 function Workspace:_notification(method, parameters)
 	if method == "workspace/delta" or method == "workspace/reset" then
-		self:_invalidate()
+		if self.reconciliation_deferred then
+			self.deferred_reconciliation = true
+			self.on_notification(method, parameters)
+		else
+			self:_invalidate()
+		end
 	else
 		self.on_notification(method, parameters)
+	end
+end
+
+function Workspace:defer_reconciliation()
+	self.reconciliation_deferred = true
+	if self.reconciling then
+		self.epoch, self.reconcile_queued = self.epoch + 1, true
+	end
+end
+
+function Workspace:resume_reconciliation(revision)
+	self.reconciliation_deferred = false
+	local required = self.deferred_reconciliation
+		or (type(revision) == "number" and self.revision < revision)
+	self.deferred_reconciliation = false
+	if required then
+		self:_invalidate()
+	elseif self.reconcile_queued and not self.reconciling then
+		self:_reconcile()
 	end
 end
 
@@ -690,20 +714,50 @@ function Workspace:resolve_project(id, callback)
 	self:_resolve_file(id, { project = true }, callback)
 end
 
-function Workspace:refresh(callback)
+function Workspace:refresh(callback, retried)
 	callback = callback or noop
 	local generation, epoch, workspace_id = self.client.generation, self.epoch, self.workspace_id
 	local expected_revision = self.revision
+	local function same_session()
+		return self.client.generation == generation
+			and not self.client.inert
+			and self.workspace_id == workspace_id
+	end
+	local function retry_after_reconcile()
+		if not same_session() then
+			return callback(stale())
+		end
+		local function resume(err)
+			if err then
+				return callback(err)
+			end
+			if not same_session() then
+				return callback(stale())
+			end
+			self:refresh(callback, true)
+		end
+		if self.reconciling or self.reconcile_queued then
+			self.reconcile_waiters[#self.reconcile_waiters + 1] = resume
+		else
+			resume()
+		end
+	end
 	self.client:request(
 		"workspace/refresh",
 		{ expectedRevision = expected_revision },
 		function(err, result)
 			if not self:_valid(generation, epoch, workspace_id) then
+				if not retried and same_session() then
+					return retry_after_reconcile()
+				end
 				return callback(stale())
 			end
 			if err then
 				if err.code == "workspace_conflict" then
 					self:_invalidate()
+					if not retried then
+						return retry_after_reconcile()
+					end
 				end
 				return callback(err)
 			end

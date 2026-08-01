@@ -25,7 +25,10 @@ local kinds = {
 	dependencyProperty = { icon = "", group = "DependencyProperty" },
 	solutionItem = { glyph = "file", group = "File" },
 	projectFile = { glyph = "file", group = "File" },
+	directory = { glyph = "folder", group = "Folder" },
+	file = { glyph = "file", group = "File" },
 }
+local selector_mappings = { "a", "<CR>", "q", "<Esc>" }
 local function valid(kind, id)
 	return id and vim.api["nvim_" .. kind .. "_is_valid"](id)
 end
@@ -92,14 +95,17 @@ local function presentation_icon(node, kind, fallback, expanded)
 	if not loaded or type(devicons.get_icon) ~= "function" then
 		return fallback
 	end
-	local fixed = (node.kind:find("Folder$") and (expanded and "" or ""))
+	local fixed = (
+		(node.kind:find("Folder$") or node.kind == "directory") and (expanded and "" or "")
+	)
 		or (node.kind == "dependencyContainer" and "")
 		or (node.kind == "dependency" and node.name:match(" %([^()]+%)$") and "")
 	if fixed then
 		return fixed
 	end
+	local extension = node.kind == "file" and node.icon_hint or nil
 	local found, icon, group =
-		pcall(devicons.get_icon, kind.devicon or node.name, nil, { default = false })
+		pcall(devicons.get_icon, kind.devicon or node.name, extension, { default = false })
 	if found and type(icon) == "string" and icon ~= "" and type(group) == "string" then
 		return icon, group
 	end
@@ -200,6 +206,9 @@ function M.mappings(actions)
 	if not valid("buf", M.buf) then
 		return
 	end
+	if M.selector_snapshot then
+		return
+	end
 	local blocked = {}
 	for lhs, callback in pairs(M.owned_mappings) do
 		local mapping = local_mapping(lhs)
@@ -240,12 +249,186 @@ function M.selected(tree)
 	return tree.selected_id
 end
 
-function M.render(tree)
+local function capture_semantic(tree)
+	local snapshot = {
+		selected = tree.selected_id,
+		ancestors = {},
+		focus = vim.api.nvim_get_current_win(),
+	}
+	if valid("win", M.win) then
+		local old = M.rows[vim.api.nvim_win_get_cursor(M.win)[1]]
+		snapshot.selected = old and old.id or snapshot.selected
+		snapshot.ancestors = old and old.ancestors or {}
+		snapshot.saved = vim.api.nvim_win_call(M.win, vim.fn.winsaveview)
+		local top = M.rows[snapshot.saved.topline]
+		snapshot.anchor = top and { id = top.id, offset = 0 }
+		snapshot.width = vim.api.nvim_win_get_width(M.win)
+	end
+	return snapshot
+end
+
+local function restore_mapping(lhs, mapping)
+	pcall(vim.keymap.del, "n", lhs, { buffer = M.buf })
+	if not mapping then
+		return
+	end
+	local options = {
+		noremap = mapping.noremap == 1,
+		nowait = mapping.nowait == 1,
+		silent = mapping.silent == 1,
+		script = mapping.script == 1,
+		expr = mapping.expr == 1,
+		replace_keycodes = mapping.replace_keycodes == 1,
+		desc = mapping.desc,
+		callback = mapping.callback,
+	}
+	vim.api.nvim_buf_set_keymap(M.buf, "n", mapping.lhs, mapping.rhs or "", options)
+end
+
+function M.enter_selector(selector, actions, tree)
+	if not valid("buf", M.buf) or M.selector_snapshot then
+		return
+	end
+	local snapshot = capture_semantic(tree)
+	snapshot.mappings = {}
+	for _, lhs in ipairs(selector_mappings) do
+		snapshot.mappings[lhs] = local_mapping(lhs) or false
+	end
+	M.selector_snapshot = snapshot
+	local modal = {
+		a = actions.new,
+		["<CR>"] = actions.activate,
+		q = actions.close,
+		["<Esc>"] = actions.close,
+	}
+	for _, lhs in ipairs(selector_mappings) do
+		vim.keymap.set("n", lhs, modal[lhs], {
+			buffer = M.buf,
+			desc = "Workspace explorer: Add Existing",
+			nowait = true,
+			silent = true,
+		})
+	end
+	M.render_selector(selector)
+end
+
+function M.leave_selector(tree)
+	local snapshot = M.selector_snapshot
+	if not snapshot then
+		return
+	end
+	for _, lhs in ipairs(selector_mappings) do
+		restore_mapping(lhs, snapshot.mappings[lhs] or nil)
+	end
+	M.selector_snapshot = nil
+	M.render(tree, snapshot)
+end
+
+function M.selected_selector(selector)
+	if valid("win", M.win) then
+		local row = M.rows[vim.api.nvim_win_get_cursor(M.win)[1]]
+		if row then
+			selector:select(row.id)
+		end
+	end
+	return selector.selected_id
+end
+
+function M.render_selector(selector)
+	if not valid("buf", M.buf) then
+		return
+	end
+	local selected, ancestors, saved, anchor, width = selector.selected_id, {}
+	if valid("win", M.win) then
+		local old = M.rows[vim.api.nvim_win_get_cursor(M.win)[1]]
+		selected, ancestors = old and old.id or selected, old and old.ancestors or ancestors
+		saved = vim.api.nvim_win_call(M.win, vim.fn.winsaveview)
+		local top = M.rows[saved.topline]
+		anchor = top and { id = top.id, offset = 0 }
+		width = vim.api.nvim_win_get_width(M.win)
+	end
+	local lines, rows, by_id, glyphs = {}, {}, {}, config.get().glyphs
+	local function add(id, depth, parents)
+		local entry, expandable = selector:get_entry(id), selector:is_expandable(id)
+		local disclosure = expandable and (selector.expanded[id] and glyphs.open or glyphs.closed)
+			or glyphs.leaf
+		local kind = kinds[entry.kind]
+		local fallback = glyphs[kind.glyph]
+		local icon, icon_group = presentation_icon(entry, kind, fallback, selector.expanded[id])
+		local indent, name = ("  "):rep(depth), entry.name:gsub("[\r\n]+[ \t]*", "\t")
+		local prefix, highlights = indent, {}
+		if disclosure ~= "" then
+			local disclosure_start = #prefix
+			prefix = prefix .. disclosure .. " "
+			highlights[#highlights + 1] =
+				span("DotnetWorkspaceExplorerDisclosure", disclosure_start, disclosure_start + #disclosure)
+		end
+		local icon_start = #prefix
+		local separator = icon ~= "" and " " or ""
+		local name_start = icon_start + #icon + #separator
+		local line = prefix .. icon .. separator .. name
+		if icon ~= "" then
+			highlights[#highlights + 1] =
+				span(icon_group or "DotnetWorkspaceExplorer" .. kind.group, icon_start, icon_start + #icon)
+		end
+		highlights[#highlights + 1] =
+			span("DotnetWorkspaceExplorer" .. kind.group, name_start, name_start + #name)
+		if selector.marks[id] then
+			local mark_start = #line
+			line = line .. " [a]"
+			highlights[#highlights + 1] = span("DotnetWorkspaceExplorerMark", mark_start, mark_start + 4)
+		end
+		lines[#lines + 1], rows[#rows + 1] =
+			line, {
+				id = id,
+				depth = depth,
+				ancestors = parents,
+				highlights = highlights,
+			}
+		by_id[id] = #rows
+		if selector.expanded[id] then
+			local child_parents = vim.list_extend(vim.deepcopy(parents), { id })
+			for _, child in ipairs(selector:children_of(id) or {}) do
+				add(child, depth + 1, child_parents)
+			end
+		end
+	end
+	add(selector.root_id, 0, {})
+	write(lines, rows)
+	M.rows = rows
+	local row = by_id[selected]
+	for index = #ancestors, 1, -1 do
+		row = row or by_id[ancestors[index]]
+	end
+	row = row or 1
+	if valid("win", M.win) then
+		vim.api.nvim_win_set_cursor(M.win, { row, 0 })
+		if anchor and by_id[anchor.id] then
+			saved.topline = by_id[anchor.id] + anchor.offset
+			vim.api.nvim_win_call(M.win, function()
+				vim.fn.winrestview(saved)
+			end)
+		end
+		if vim.api.nvim_win_get_width(M.win) ~= width then
+			vim.api.nvim_win_set_width(M.win, width)
+		end
+	end
+	selector:select(rows[row].id)
+end
+
+function M.render(tree, restoration)
 	if not valid("buf", M.buf) then
 		return
 	end
 	local selected, ancestors, saved, anchor, width = tree.selected_id, {}
-	if valid("win", M.win) then
+	if restoration then
+		selected, ancestors, saved, anchor, width =
+			restoration.selected,
+			restoration.ancestors,
+			restoration.saved,
+			restoration.anchor,
+			restoration.width
+	elseif valid("win", M.win) then
 		local old = M.rows[vim.api.nvim_win_get_cursor(M.win)[1]]
 		selected, ancestors = old and old.id or selected, old and old.ancestors or ancestors
 		saved = vim.api.nvim_win_call(M.win, vim.fn.winsaveview)
@@ -339,6 +522,9 @@ function M.render(tree)
 	end
 	if rows[row] then
 		tree:select(rows[row].id)
+	end
+	if restoration and valid("win", restoration.focus) then
+		vim.api.nvim_set_current_win(restoration.focus)
 	end
 end
 

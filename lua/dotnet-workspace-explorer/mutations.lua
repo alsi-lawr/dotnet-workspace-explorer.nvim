@@ -100,6 +100,10 @@ local function compatible_descriptor(result, command_id, target_kind)
 				selectionId = "text",
 				name = "text",
 			}
+		or command_id == "workspace.addExisting" and {
+			selectorId = "text",
+			entryIds = "textArray",
+		}
 		or {}
 	local found = {}
 	for _, parameter in ipairs(descriptor.parameters) do
@@ -124,8 +128,14 @@ local option_keys = {
 	execution = true,
 	language = false,
 }
+local add_existing_targets = {
+	workspace = true,
+	solutionFolder = true,
+	project = true,
+	projectFolder = true,
+}
 
-local function compatible_option(value)
+local function compatible_option(value, add_existing, target_kind)
 	if
 		not exact_keys(value, option_keys)
 		or not nonempty(value.selectionId)
@@ -139,11 +149,20 @@ local function compatible_option(value)
 		return value.execution == "transaction" and value.language == nil
 	elseif value.kind == "itemTemplate" or value.kind == "projectTemplate" then
 		return value.execution == "operation"
+	elseif value.kind == "solutionFolder" then
+		return value.execution == "transaction"
+			and value.language == nil
+			and (target_kind == "workspace" or target_kind == "solutionFolder")
+	elseif value.kind == "addExisting" then
+		return add_existing
+			and add_existing_targets[target_kind] == true
+			and value.execution == "transaction"
+			and value.language == nil
 	end
 	return false
 end
 
-local function compatible_options(result, revision)
+local function compatible_options(result, revision, add_existing, target_kind)
 	if
 		not exact_keys(result, { revision = true, options = true })
 		or result.revision ~= revision
@@ -154,7 +173,7 @@ local function compatible_options(result, revision)
 	end
 	local seen = {}
 	for _, option in ipairs(result.options) do
-		if not compatible_option(option) or seen[option.selectionId] then
+		if not compatible_option(option, add_existing, target_kind) or seen[option.selectionId] then
 			return false
 		end
 		seen[option.selectionId] = true
@@ -295,6 +314,7 @@ function Mutations.new(options)
 		selected = options.selected,
 		on_error = options.on_error,
 		on_refresh = options.on_refresh,
+		on_add_existing = options.on_add_existing,
 		pending = {},
 		valid = true,
 	}, Mutations)
@@ -439,7 +459,14 @@ function Mutations:create()
 		if err then
 			return self:_fail(err)
 		end
-		if not compatible_options(result, revision) then
+		if
+			not compatible_options(
+				result,
+				revision,
+				self.workspace:has_capability("workspace.addExisting.selector"),
+				node.kind
+			)
+		then
 			return self:_fail({
 				code = "incompatible_options",
 				message = "The workspace creation options are incompatible.",
@@ -458,6 +485,20 @@ function Mutations:create()
 		}, function(option)
 			if not self:_live() or option == nil then
 				return
+			end
+			if option.kind == "addExisting" then
+				if not self.on_add_existing then
+					return self:_fail({
+						code = "unsupported_capability",
+						message = "The Add Existing selector is unavailable.",
+					})
+				end
+				return self.on_add_existing({
+					selection_id = option.selectionId,
+					target_id = target_id,
+					target_kind = node.kind,
+					revision = revision,
+				})
 			end
 			vim.ui.input({ prompt = option.displayName .. " name: " }, function(name)
 				if not self:_live() or name == nil then
@@ -539,5 +580,9 @@ function Mutations:invalidate()
 end
 
 M.Mutations = Mutations
+M.compatible_applied = compatible_applied
+M.compatible_descriptor = compatible_descriptor
+M.compatible_preview = compatible_preview
+M.effects_prompt = effects_prompt
 
 return M

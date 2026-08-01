@@ -12,6 +12,9 @@ esac
 
 rm -rf "$fixture"
 mkdir -p \
+	"$fixture/existing/Root.CSharp" \
+	"$fixture/existing/Root.FSharp" \
+	"$fixture/existing/Root.VisualBasic" \
 	"$fixture/src/Studio.CSharp/Actions" \
 	"$fixture/src/Studio.CSharp/Models" \
 	"$fixture/src/Studio.FSharp/Foundation" \
@@ -141,5 +144,32 @@ for name in CommandRouter TreeProjection WorkspaceSession; do
 		>"$fixture/src/Studio.VisualBasic/Services/$name.vb"
 done
 printf 'Friend Module Startup\\nEnd Module\\n' >"$fixture/src/Studio.VisualBasic/Startup.vb"
+
+cat >"$fixture/existing/Root.CSharp/Root.CSharp.csproj" <<'EOF'
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+</Project>
+EOF
+cat >"$fixture/existing/Root.FSharp/Root.FSharp.fsproj" <<'EOF'
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+</Project>
+EOF
+cat >"$fixture/existing/Root.VisualBasic/Root.VisualBasic.vbproj" <<'EOF'
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+</Project>
+EOF
+printf 'Fixture solution item.\\n' >"$fixture/NOTES.md"
+printf 'namespace Studio.FSharp\\n\\nmodule Loose = let ready = true\\n' \
+	>"$fixture/src/Studio.FSharp/Loose.fs"
+printf 'namespace Studio.FSharp\\n\\nmodule LooseNested = let ready = true\\n' \
+	>"$fixture/src/Studio.FSharp/Foundation/LooseNested.fs"
 
 printf '%s\n' "$fixture/SemanticStudio.slnx"

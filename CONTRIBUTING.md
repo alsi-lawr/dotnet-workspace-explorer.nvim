@@ -42,6 +42,8 @@ nvim -u NONE -i NONE --noplugin --headless \
   --cmd "set runtimepath^=$PWD" -l tests/headless/git.lua
 nvim -u NONE -i NONE --noplugin --headless \
   --cmd "set runtimepath^=$PWD" -l tests/headless/tree-actions.lua
+nvim -u NONE -i NONE --noplugin --headless \
+  --cmd "set runtimepath^=$PWD" -l tests/headless/selector.lua
 ```
 
 The smoke keeps `setup` and plugin loading inert. The presentation probe exercises the semantic
@@ -54,6 +56,9 @@ preservation of expanded paths and deep selection.
 The editing probe covers exact rename/move/copy envelopes and mark lifecycle. The Git probe covers
 conditional status negotiation, freshness, coalescing, cleanup, and decoration replacement. The
 tree-action probe covers project-file resolution plus atomic full expansion and collapse.
+The selector probe covers the transient Add Existing protocol, opaque paging and marks, modal
+mapping restoration, callback invalidation, action routing, semantic-state restoration, and
+optional Devicons states.
 
 After creating a disposable fixture under `.agent-workspace`, the bounded real-core probe accepts
 explicit paths:
@@ -68,9 +73,9 @@ nvim -u NONE -i NONE --noplugin --headless \
 ## Making changes
 
 - Keep transport and generation safety in `rpc.lua`, normalized tree state in `workspace.lua`,
-  New/Delete orchestration in `mutations.lua`, rename/move/copy orchestration in `editing.lua`,
-  event-driven Git status in `git.lua`, public lifecycle actions in `init.lua`, configuration in
-  `config.lua`, and presentation in `view.lua`.
+  New/Delete orchestration in `mutations.lua`, transient Add Existing state in `selector.lua`,
+  rename/move/copy orchestration in `editing.lua`, event-driven Git status in `git.lua`, public
+  lifecycle actions in `init.lua`, configuration in `config.lua`, and presentation in `view.lua`.
 - Preserve the core as the authority for solution state and writes. Lua must not infer workspace
   paths or edit project files directly.
 - Expose user actions as commands before adding buffer-local convenience mappings.

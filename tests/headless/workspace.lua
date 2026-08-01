@@ -205,4 +205,108 @@ assert_equal(true, tree.expanded.project, "project remains expanded after reset"
 assert_equal({}, errors, "reset reconciliation stays silent")
 assert_equal(nil, client.termination, "valid reconciliation keeps the session live")
 
+do
+	local invalidations, notifications = 0, {}
+	local deferred = setmetatable({
+		revision = 7,
+		on_notification = function(method, parameters)
+			notifications[#notifications + 1] = { method, parameters }
+		end,
+	}, { __index = Workspace })
+	deferred._invalidate = function()
+		invalidations = invalidations + 1
+	end
+	deferred:defer_reconciliation()
+	deferred:_notification("workspace/reset", { revision = 8 })
+	assert_equal(0, invalidations, "selector mode defers semantic reconciliation")
+	assert_equal("workspace/reset", notifications[1][1], "deferred reset reaches selector")
+	deferred:resume_reconciliation(8)
+	assert_equal(1, invalidations, "selector exit starts exactly one reconciliation")
+end
+
+local function refresh_harness()
+	local requests, invalidations = {}, 0
+	local refresh = setmetatable({
+		revision = 7,
+		epoch = 0,
+		workspace_id = "workspace-id",
+		reconcile_waiters = {},
+		client = {
+			generation = 1,
+			inert = false,
+		},
+	}, { __index = Workspace })
+	refresh.client.request = function(_, method, parameters, callback)
+		assert_equal("workspace/refresh", method, "refresh method")
+		requests[#requests + 1] = {
+			parameters = parameters,
+			callback = callback,
+		}
+	end
+	refresh._invalidate = function(self)
+		invalidations = invalidations + 1
+		self.epoch = self.epoch + 1
+		self.reconciling = true
+	end
+	local function reconcile(revision)
+		refresh.revision = revision
+		refresh.reconciling = false
+		refresh:_finish_reconcile()
+	end
+	return refresh, requests, function()
+		return invalidations
+	end, reconcile
+end
+
+do
+	local refresh, requests, invalidations, reconcile = refresh_harness()
+	local callback_error, callback_result
+	refresh:refresh(function(err, result)
+		callback_error, callback_result = err, result
+	end)
+	assert_equal(1, #requests, "refresh starts once")
+	assert_equal({ expectedRevision = 7 }, requests[1].parameters, "initial refresh revision")
+
+	refresh.epoch = refresh.epoch + 1
+	refresh.reconciling = true
+	requests[1].callback(nil, { revision = 8, reset = false })
+	assert_equal(1, #requests, "stale refresh waits for active reconciliation")
+	assert_equal(nil, callback_error, "stale refresh does not fail before reconciliation")
+
+	reconcile(8)
+	assert_equal(2, #requests, "refresh retries once after reconciliation")
+	assert_equal({ expectedRevision = 8 }, requests[2].parameters, "retry uses reconciled revision")
+	requests[2].callback(nil, { revision = 8, reset = false })
+	assert_equal(nil, callback_error, "reconciled refresh succeeds")
+	assert_equal({ revision = 8, reset = false }, callback_result, "refresh result")
+	assert_equal(1, invalidations(), "successful retry starts one final reconciliation")
+end
+
+do
+	local refresh, requests, _, reconcile = refresh_harness()
+	local callback_error, callback_count = nil, 0
+	refresh:refresh(function(err)
+		callback_error, callback_count = err, callback_count + 1
+	end)
+	requests[1].callback({
+		code = "workspace_conflict",
+		message = "The expected workspace revision is stale.",
+	})
+	assert_equal(1, #requests, "workspace conflict waits for reconciliation")
+	reconcile(8)
+	assert_equal(2, #requests, "workspace conflict retries once")
+
+	requests[2].callback({
+		code = "workspace_conflict",
+		message = "The expected workspace revision is stale again.",
+	})
+	assert_equal(2, #requests, "second workspace conflict does not retry again")
+	assert_equal(1, callback_count, "bounded refresh finishes once")
+	assert_equal(
+		"workspace_conflict",
+		callback_error.code,
+		"second conflict reports bounded refresh failure"
+	)
+end
+
 print("DWE workspace reconciliation probe passed")

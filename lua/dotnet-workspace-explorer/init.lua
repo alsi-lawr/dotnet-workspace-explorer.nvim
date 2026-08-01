@@ -2,11 +2,13 @@ local config = require("dotnet-workspace-explorer.config")
 local Editing = require("dotnet-workspace-explorer.editing").Editing
 local Git = require("dotnet-workspace-explorer.git").Git
 local Mutations = require("dotnet-workspace-explorer.mutations").Mutations
+local Selector = require("dotnet-workspace-explorer.selector").Selector
 local view = require("dotnet-workspace-explorer.view")
 local Workspace = require("dotnet-workspace-explorer.workspace").Workspace
 
 local M = {}
-local tree, mutations, editing, git_status, target, initial_failed, terminal_failed, has_good
+local tree, mutations, selector, editing, git_status, target
+local initial_failed, terminal_failed, has_good
 local function fail(err)
 	if err then
 		view.failure(err)
@@ -14,6 +16,9 @@ local function fail(err)
 end
 
 local function start(resolved, retain_tree)
+	if selector then
+		selector:invalidate(true)
+	end
 	local clear_retained_marks = retain_tree
 		and tree
 		and (
@@ -40,7 +45,8 @@ local function start(resolved, retain_tree)
 		has_good = false
 		view.loading()
 	end
-	local current, current_mutations, current_editing, current_git, loaded, git_after_revision
+	local current, current_mutations, current_selector, current_editing, current_git
+	local loaded, git_after_revision
 	current = Workspace.new({
 		command = config.get().command,
 		target = target,
@@ -49,6 +55,10 @@ local function start(resolved, retain_tree)
 			if current == tree then
 				current_editing:reconcile()
 				loaded, initial_failed, terminal_failed, has_good = true, false, false, true
+				if current_selector and current_selector:is_engaged() then
+					current_selector:workspace_changed(state.revision)
+					return
+				end
 				view.render(state)
 				if current_git then
 					current_git:start()
@@ -66,10 +76,46 @@ local function start(resolved, retain_tree)
 			end
 		end,
 		on_notification = function(method, parameters)
+			if current == tree and current_selector == selector then
+				current_selector:notification(method, parameters)
+			end
 			if current == tree and current_mutations == mutations then
 				current_mutations:notification(method, parameters)
 			end
 		end,
+	})
+	current_selector = Selector.new({
+		workspace = current,
+		is_live = function()
+			return current == tree and current_selector == selector
+		end,
+		on_enter = function(active_selector)
+			if current == tree and current_selector == selector then
+				view.enter_selector(active_selector, M, current)
+			end
+		end,
+		on_render = function(active_selector)
+			if current == tree and current_selector == selector then
+				view.render_selector(active_selector)
+			end
+		end,
+		on_leave = function()
+			if current == tree and current_selector == selector then
+				view.leave_selector(current)
+			end
+		end,
+		on_selected = view.selected_selector,
+		on_suspend = function()
+			current:defer_reconciliation()
+		end,
+		on_resume = function(revision)
+			if revision then
+				git_after_revision = revision
+			end
+			current:resume_reconciliation(revision)
+		end,
+		on_error = fail,
+		on_success = function() end,
 	})
 	current_mutations = Mutations.new({
 		workspace = current,
@@ -84,6 +130,11 @@ local function start(resolved, retain_tree)
 			if current == tree and current_mutations == mutations then
 				git_after_revision = revision
 				current:mutation_completed(revision)
+			end
+		end,
+		on_add_existing = function(options)
+			if current == tree and current_selector == selector then
+				current_selector:start(options)
 			end
 		end,
 	})
@@ -122,7 +173,8 @@ local function start(resolved, retain_tree)
 			end,
 		})
 	end
-	tree, mutations, editing, git_status = current, current_mutations, current_editing, current_git
+	tree, mutations, selector, editing, git_status =
+		current, current_mutations, current_selector, current_editing, current_git
 	tree:start(function(err)
 		if err and current == tree then
 			initial_failed, terminal_failed = not loaded, current:is_terminal()
@@ -158,9 +210,15 @@ function M.open(requested)
 end
 
 function M.close()
+	if selector and selector:is_engaged() then
+		return selector:cancel()
+	end
 	view.close()
 	if mutations then
 		mutations:invalidate()
+	end
+	if selector then
+		selector:invalidate(true)
 	end
 	if editing then
 		editing:invalidate()
@@ -171,8 +229,8 @@ function M.close()
 	if tree then
 		tree:stop("explorer_closed")
 	end
-	tree, mutations, editing, git_status, target, initial_failed, terminal_failed, has_good =
-		nil, nil, nil, nil, nil, nil, nil, nil
+	tree, mutations, selector, editing, git_status, target, initial_failed, terminal_failed, has_good =
+		nil, nil, nil, nil, nil, nil, nil, nil, nil
 end
 
 function M.toggle(requested)
@@ -190,6 +248,9 @@ end
 function M.refresh()
 	if not tree then
 		return view.failure({ message = "Open the workspace explorer before refreshing." })
+	end
+	if selector and selector:is_engaged() then
+		selector:cancel()
 	end
 	if initial_failed or terminal_failed then
 		return start(target, has_good)
@@ -213,12 +274,18 @@ local function with_container(action)
 end
 
 function M.expand()
+	if selector and selector:is_engaged() then
+		return selector:expand()
+	end
 	with_container(function(id)
 		tree:expand(id, fail)
 	end)
 end
 
 function M.collapse()
+	if selector and selector:is_engaged() then
+		return selector:collapse()
+	end
 	with_container(function(id)
 		tree:collapse(id)
 	end)
@@ -241,6 +308,9 @@ function M.collapse_all()
 end
 
 function M.activate()
+	if selector and selector:is_engaged() then
+		return selector:confirm()
+	end
 	local id = tree and view.selected(tree)
 	local node = id and tree:get_node(id)
 	if not node then
@@ -285,6 +355,9 @@ function M.edit()
 end
 
 function M.new()
+	if selector and selector:is_engaged() then
+		return selector:toggle()
+	end
 	if not mutations then
 		return fail({ message = "Open the workspace explorer before creating an item." })
 	end

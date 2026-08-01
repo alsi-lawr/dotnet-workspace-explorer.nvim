@@ -6,7 +6,11 @@ local fixture = assert(vim.env.DWE_FIXTURE, "DWE_FIXTURE is required")
 local fixture_root = vim.fs.dirname(fixture)
 local explorer = require("dotnet-workspace-explorer")
 local view = require("dotnet-workspace-explorer.view")
-local notification
+local notification, desired_create_kind, desired_name
+
+local function assert_equal(expected, actual, message)
+	assert(vim.deep_equal(expected, actual), message)
+end
 
 local function wait_for(predicate, message)
 	assert(
@@ -33,13 +37,50 @@ local function select_matching(text)
 	error("missing explorer row: " .. text .. "\n" .. vim.inspect(lines()))
 end
 
+local function local_mapping(lhs)
+	local raw = vim.keycode(lhs)
+	for _, mapping in ipairs(vim.api.nvim_buf_get_keymap(view.buf, "n")) do
+		if mapping.lhsraw == raw then
+			return {
+				callback = mapping.callback,
+				rhs = mapping.rhs,
+				noremap = mapping.noremap,
+				nowait = mapping.nowait,
+				silent = mapping.silent,
+				expr = mapping.expr,
+				desc = mapping.desc,
+			}
+		end
+	end
+	return false
+end
+
+local function new_kind(kind, name)
+	desired_create_kind, desired_name = kind, name
+	explorer.new()
+end
+
 vim.notify = function(message, level)
 	if level == vim.log.levels.ERROR then
 		notification = message
 	end
 end
-vim.ui.select = function(items, _, callback)
+vim.ui.select = function(items, options, callback)
+	if options.kind == "workspace-create-option" then
+		for _, item in ipairs(items) do
+			if item.kind == desired_create_kind then
+				desired_create_kind = nil
+				return callback(item)
+			end
+		end
+		return error("missing New kind: " .. tostring(desired_create_kind))
+	end
 	callback(items[1])
+end
+vim.ui.input = function(_, callback)
+	local value = desired_name
+	desired_name = nil
+	callback(value)
 end
 
 explorer.setup({
@@ -66,6 +107,176 @@ wait_for(function()
 	end
 	return false
 end, "ExpandAll did not hydrate dependency properties")
+
+select_matching("S SemanticStudio")
+new_kind("solutionFolder", "Solution Items")
+wait_for(function()
+	for _, line in ipairs(lines()) do
+		if line:find("D Solution Items", 1, true) then
+			return true
+		end
+	end
+	return false
+end, "logical Solution Folder did not reconcile")
+
+select_matching("S SemanticStudio")
+new_kind("addExisting")
+wait_for(function()
+	for _, line in ipairs(lines()) do
+		if line:find("existing", 1, true) then
+			return true
+		end
+	end
+	return false
+end, "root Add Existing selector did not open")
+select_matching("existing")
+explorer.expand()
+for _, project in ipairs({
+	{ directory = "Root.CSharp", file = "Root.CSharp.csproj" },
+	{ directory = "Root.FSharp", file = "Root.FSharp.fsproj" },
+	{ directory = "Root.VisualBasic", file = "Root.VisualBasic.vbproj" },
+}) do
+	wait_for(function()
+		for _, line in ipairs(lines()) do
+			if line:find(project.directory, 1, true) then
+				return true
+			end
+		end
+		return false
+	end, "root project directory did not appear: " .. project.directory)
+	select_matching(project.directory)
+	explorer.expand()
+	wait_for(function()
+		for _, line in ipairs(lines()) do
+			if line:find(project.file, 1, true) then
+				return true
+			end
+		end
+		return false
+	end, "root project did not appear: " .. project.file)
+	select_matching(project.file)
+	explorer.new()
+end
+explorer.activate()
+wait_for(function()
+	local found = {}
+	for _, line in ipairs(lines()) do
+		for _, name in ipairs({ "Root.CSharp", "Root.FSharp", "Root.VisualBasic" }) do
+			if line:find("P " .. name, 1, true) then
+				found[name] = true
+			end
+		end
+	end
+	return vim.tbl_count(found) == 3
+end, "root C#/F#/VB multi-select did not reconcile")
+
+select_matching("D Solution Items")
+explorer.expand()
+new_kind("addExisting")
+wait_for(function()
+	for _, line in ipairs(lines()) do
+		if line:find("F NOTES.md", 1, true) and not line:find("[a]", 1, true) then
+			return true
+		end
+	end
+	return false
+end, "solution-folder Add Existing selector did not open")
+select_matching("NOTES.md")
+explorer.new()
+explorer.activate()
+wait_for(function()
+	for _, line in ipairs(lines()) do
+		if line:find("F NOTES.md", 1, true) and not line:find("[a]", 1, true) then
+			return true
+		end
+	end
+	return false
+end, "solution item did not reconcile")
+
+select_matching("P Studio.FSharp")
+new_kind("addExisting")
+wait_for(function()
+	for _, line in ipairs(lines()) do
+		if line:find("Loose.fs", 1, true) then
+			return true
+		end
+	end
+	return false
+end, "project Add Existing selector did not open")
+select_matching("Loose.fs")
+explorer.new()
+explorer.activate()
+wait_for(function()
+	for _, line in ipairs(lines()) do
+		if line:find("F Loose.fs", 1, true) and not line:find("[a]", 1, true) then
+			return true
+		end
+	end
+	return false
+end, "project item did not reconcile")
+
+select_matching("D Foundation")
+new_kind("addExisting")
+wait_for(function()
+	local current = lines()
+	if current[1] and current[1]:find("S SemanticStudio", 1, true) then
+		return false
+	end
+	for _, line in ipairs(current) do
+		if line:find("Foundation", 1, true) then
+			return true
+		end
+	end
+	return false
+end, "project-folder Add Existing selector did not open")
+select_matching("Foundation")
+explorer.expand()
+wait_for(function()
+	for _, line in ipairs(lines()) do
+		if line:find("LooseNested.fs", 1, true) then
+			return true
+		end
+	end
+	return false
+end, "nested project item did not appear")
+select_matching("LooseNested.fs")
+explorer.new()
+explorer.activate()
+wait_for(function()
+	for _, line in ipairs(lines()) do
+		if line:find("F LooseNested.fs", 1, true) and not line:find("[a]", 1, true) then
+			return true
+		end
+	end
+	return false
+end, "project-folder item did not reconcile")
+
+select_matching("P Studio.FSharp")
+vim.api.nvim_win_set_width(view.win, 43)
+local before_cancel_lines = vim.deepcopy(lines())
+local before_cancel_maps = {}
+for _, lhs in ipairs({ "a", "<CR>", "q", "<Esc>" }) do
+	before_cancel_maps[lhs] = local_mapping(lhs)
+end
+new_kind("addExisting")
+wait_for(function()
+	local current = lines()
+	if current[1] and current[1]:find("S SemanticStudio", 1, true) then
+		return false
+	end
+	for _, line in ipairs(current) do
+		if line:find("Studio.FSharp", 1, true) and not line:find("P ", 1, true) then
+			return true
+		end
+	end
+	return false
+end, "cancellation selector did not open")
+explorer.close()
+assert_equal(before_cancel_lines, lines(), "selector cancellation changed semantic rows")
+assert_equal(43, vim.api.nvim_win_get_width(view.win), "selector cancellation changed width")
+for _, lhs in ipairs({ "a", "<CR>", "q", "<Esc>" }) do
+	assert_equal(before_cancel_maps[lhs], local_mapping(lhs), lhs .. " mapping did not restore")
+end
 
 select_matching("P Studio.CSharp")
 explorer.edit()
@@ -124,6 +335,20 @@ wait_for(function()
 	return vim.fn.filereadable(fixture_root .. "/src/Studio.CSharp/Actions/ProjectNode.cs") == 1
 		and vim.fn.filereadable(fixture_root .. "/src/Studio.CSharp/Models/ProjectNode.cs") == 0
 end, "Move Place did not complete")
+explorer.refresh()
+wait_for(function()
+	local actions, models, moved
+	for index, line in ipairs(lines()) do
+		if line:find("D Actions", 1, true) then
+			actions = index
+		elseif line:find("D Models", 1, true) then
+			models = index
+		elseif line:find("F ProjectNode.cs", 1, true) then
+			moved = index
+		end
+	end
+	return actions and models and moved and actions < moved and moved < models
+end, "post-mutation semantic revision did not reconcile")
 
 explorer.collapse_all()
 assert(#lines() == 1, "CollapseAll did not show one collapsed tree")

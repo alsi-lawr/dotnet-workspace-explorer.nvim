@@ -78,6 +78,11 @@ and `W` collapses it. The existing `l`, `h`, `a`, `d`, `R`, and `q` mappings exp
 create, delete, refresh, and close. Dependencies expand into compact, read-only Visual
 Studio-inspired reference properties, including available package and assembly versions.
 
+New includes logical Solution Folders where the selected context supports them. Add Existing opens
+a temporary core-backed selector in the same drawer: `a` marks eligible files, `<CR>` previews and
+confirms the batch, `l`/`h` browse opaque directories, and `q` or Escape cancels. The semantic tree
+returns with its mappings and semantic selection restored; cancellation leaves it unchanged.
+
 Every action is also available through its `DotnetWorkspaceExplorer*` command and public Lua
 function. Mappings can be replaced or disabled individually; `clear_marks` and `git_refresh` have
 no default key.

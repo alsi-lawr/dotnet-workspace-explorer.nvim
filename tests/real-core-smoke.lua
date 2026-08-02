@@ -149,13 +149,14 @@ vim.ui.select = function(items, options, callback)
 	end
 	callback(items[1])
 end
-vim.ui.input = function(_, callback)
+vim.ui.input = function(options, callback)
+	if options.kind == "confirmation" then
+		callback(confirmation_result or "y")
+		return
+	end
 	local value = desired_name
 	desired_name = nil
 	callback(value)
-end
-vim.fn.confirm = function()
-	return confirmation_result or 1
 end
 
 explorer.setup({
@@ -286,10 +287,10 @@ wait_for(function()
 end, "solution-folder Add Existing selector did not open")
 select_matching("NOTES.md")
 local_mapping("<Space>").callback()
-confirmation_result = 2
+confirmation_result = "n"
 explorer.activate()
 assert(not semantic_root(lines()[1]), "cancelled Add Existing confirmation left the selector")
-confirmation_result = 1
+confirmation_result = "y"
 explorer.activate()
 wait_for(function()
 	local current = lines()
@@ -427,6 +428,10 @@ assert(
 assert(view.is_open(), "Edit closed the explorer")
 
 vim.ui.input = function(options, callback)
+	if options.kind == "confirmation" then
+		callback("y")
+		return
+	end
 	assert(options.default == "Bootstrap.cs", "Rename did not default to the current node name")
 	callback("BootstrapRenamed.cs")
 end
@@ -483,6 +488,20 @@ wait_for(function()
 	end
 	return actions and models and moved and actions < moved and moved < models
 end, "post-mutation semantic revision did not reconcile")
+
+select_matching("ProjectNode.cs")
+explorer.delete()
+wait_for(function()
+	return vim.fn.filereadable(fixture_root .. "/src/Studio.CSharp/Actions/ProjectNode.cs") == 0
+end, "Delete did not complete")
+wait_for(function()
+	for _, line in ipairs(lines()) do
+		if line:find("ProjectNode.cs", 1, true) then
+			return false
+		end
+	end
+	return true
+end, "deleted node did not reconcile")
 
 explorer.collapse_all()
 assert(#lines() == 1, "CollapseAll did not show one collapsed tree")

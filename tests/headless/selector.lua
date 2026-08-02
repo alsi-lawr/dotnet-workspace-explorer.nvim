@@ -255,12 +255,13 @@ scenario("exact-start-paging-marks-confirm-execute", function()
 	state.select("file-2")
 	state.selector:toggle()
 	assert_equal({ "file-1", "file-2" }, state.selector.mark_order, "mark order is complete")
-	local original_confirm = vim.fn.confirm
-	vim.fn.confirm = function(prompt, choices, default)
-		assert(prompt:find("App.csproj", 1, true), "all preview effects are displayed")
-		assert_equal("&Yes\n&No", choices, "compact Add Existing choices")
-		assert_equal(2, default, "Add Existing defaults to No")
-		return 1
+	local original_input = vim.ui.input
+	vim.ui.input = function(options, callback)
+		assert(options.prompt:find("App.csproj", 1, true), "all preview effects are displayed")
+		assert(options.prompt:find("Confirm [y/N]", 1, true), "confirmation prompt is explicit")
+		assert_equal("N", options.default, "Add Existing defaults to No")
+		assert_equal("confirmation", options.kind, "Add Existing uses vim.ui.input")
+		callback("y")
 	end
 	state.selector:activate()
 	assert_equal({
@@ -277,7 +278,7 @@ scenario("exact-start-paging-marks-confirm-execute", function()
 		expectedRevision = 7,
 	}
 	assert_equal(expected_preview, state.calls[4].parameters, "exact Add Existing preview")
-	vim.fn.confirm = original_confirm
+	vim.ui.input = original_input
 	local execute = vim.deepcopy(expected_preview)
 	execute.confirmationToken = "preview-token"
 	assert_equal(
@@ -654,9 +655,9 @@ scenario("preview-and-execute-late-callbacks", function()
 		"workspace/commands/execute",
 	}) do
 		local delayed
-		local original_confirm = vim.fn.confirm
-		vim.fn.confirm = function()
-			return 1
+		local original_input = vim.ui.input
+		vim.ui.input = function(_, callback)
+			callback("y")
 		end
 		local state = harness({
 			request = function(method, _, callback)
@@ -679,15 +680,39 @@ scenario("preview-and-execute-late-callbacks", function()
 		end
 		assert_equal({ "enter", "render", "leave" }, state.events, delayed_method .. " late event")
 		assert_equal(false, state.selector:is_engaged(), delayed_method .. " remains invalid")
-		vim.fn.confirm = original_confirm
+		vim.ui.input = original_input
 	end
+end)
+
+scenario("confirmation-late-callback", function()
+	local pending
+	local original_input = vim.ui.input
+	vim.ui.input = function(options, callback)
+		assert_equal("confirmation", options.kind, "late prompt uses vim.ui.input")
+		pending = callback
+	end
+	local state = harness()
+	state.start()
+	state.selector:toggle()
+	state.selector:confirm()
+	assert(pending, "confirmation callback was not retained")
+	state.selector:cancel()
+	pending("y")
+	assert_equal({ "enter", "render", "leave" }, state.events, "late confirmation stays inert")
+	assert_equal(false, state.selector:is_engaged(), "late confirmation cannot revive selector")
+	assert_equal(
+		"workspace/addExisting/close",
+		state.calls[#state.calls].method,
+		"no execute follows"
+	)
+	vim.ui.input = original_input
 end)
 
 scenario("all-target-context-descriptors", function()
 	for _, target_kind in ipairs({ "workspace", "solutionFolder", "project", "projectFolder" }) do
-		local original_confirm = vim.fn.confirm
-		vim.fn.confirm = function()
-			return 2
+		local original_input = vim.ui.input
+		vim.ui.input = function(_, callback)
+			callback("n")
 		end
 		local state = harness({ target_kind = target_kind })
 		state.start()
@@ -696,8 +721,27 @@ scenario("all-target-context-descriptors", function()
 		assert_equal({}, state.errors, target_kind .. " descriptor accepted")
 		assert_equal(true, state.selector:is_active(), target_kind .. " remains after confirm cancel")
 		state.selector:cancel()
-		vim.fn.confirm = original_confirm
+		vim.ui.input = original_input
 	end
+end)
+
+scenario("dismissed-confirmation", function()
+	local original_input = vim.ui.input
+	vim.ui.input = function(_, callback)
+		callback(nil)
+	end
+	local state = harness()
+	state.start()
+	state.selector:toggle()
+	state.selector:confirm()
+	assert_equal(true, state.selector:is_active(), "dismissed confirmation leaves selector active")
+	assert_equal(
+		"workspace/commands/preview",
+		state.calls[#state.calls].method,
+		"dismissal stops execute"
+	)
+	state.selector:cancel()
+	vim.ui.input = original_input
 end)
 
 local function semantic_tree()
@@ -960,13 +1004,13 @@ scenario(
 		end
 
 		exercise("success", nil, function(state)
-			local original_confirm = vim.fn.confirm
-			vim.fn.confirm = function()
-				return 1
+			local original_input = vim.ui.input
+			vim.ui.input = function(_, callback)
+				callback("y")
 			end
 			state.selector:toggle()
 			state.selector:confirm()
-			vim.fn.confirm = original_confirm
+			vim.ui.input = original_input
 		end)
 		exercise("cancellation", nil, function(state)
 			state.selector:cancel()

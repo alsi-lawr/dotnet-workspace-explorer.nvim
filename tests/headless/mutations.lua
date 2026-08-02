@@ -143,8 +143,8 @@ local function harness(options)
 		end,
 	})
 
-	local original_select, original_input, original_confirm =
-		vim.ui.select, vim.ui.input, vim.fn.confirm
+	local pending_confirmation
+	local original_select, original_input = vim.ui.select, vim.ui.input
 	vim.ui.select = function(items, select_options, callback)
 		selections[#selections + 1] = {
 			items = vim.deepcopy(items),
@@ -159,20 +159,23 @@ local function harness(options)
 		end
 	end
 	vim.ui.input = function(input_options, callback)
+		if input_options.kind == "confirmation" then
+			confirmations[#confirmations + 1] = vim.deepcopy(input_options)
+			if options.defer_confirmation then
+				pending_confirmation = callback
+			elseif options.confirm == false then
+				callback(nil)
+			else
+				callback(options.confirm == "Cancel" and "n" or (options.confirm or "y"))
+			end
+			return
+		end
 		inputs[#inputs + 1] = vim.deepcopy(input_options)
 		if options.name == false then
 			callback(nil)
 		else
 			callback(options.name or "Thing.cs")
 		end
-	end
-	vim.fn.confirm = function(prompt, choices, default)
-		confirmations[#confirmations + 1] = {
-			prompt = prompt,
-			choices = choices,
-			default = default,
-		}
-		return (options.confirm == "Cancel" or options.confirm == false) and 2 or 1
 	end
 
 	return {
@@ -188,9 +191,14 @@ local function harness(options)
 		set_live = function(value)
 			live = value
 		end,
+		answer_confirmation = function(answer)
+			assert(pending_confirmation, "no confirmation callback is pending")
+			local callback = pending_confirmation
+			pending_confirmation = nil
+			callback(answer)
+		end,
 		restore = function()
-			vim.ui.select, vim.ui.input, vim.fn.confirm =
-				original_select, original_input, original_confirm
+			vim.ui.select, vim.ui.input = original_select, original_input
 		end,
 	}
 end
@@ -317,8 +325,9 @@ do
 		"preview request remains unchanged"
 	)
 	assert(state.confirmations[1].prompt:find("/workspace/App.csproj", 1, true))
-	assert_equal("&Yes\n&No", state.confirmations[1].choices, "compact Create choices")
-	assert_equal(2, state.confirmations[1].default, "Create defaults to No")
+	assert(state.confirmations[1].prompt:find("Confirm [y/N]", 1, true))
+	assert_equal("N", state.confirmations[1].default, "Create defaults to No")
+	assert_equal("confirmation", state.confirmations[1].kind, "Create uses vim.ui.input")
 	assert_equal({ 8 }, state.refreshes, "synchronous creation refreshes once")
 	assert_equal({}, state.errors, "successful creation errors")
 end
@@ -327,11 +336,24 @@ for _, case in ipairs({
 	{ label = "picker", options = { pick = false }, calls = 1 },
 	{ label = "name", options = { name = false }, calls = 1 },
 	{ label = "confirmation", options = { confirm = "Cancel" }, calls = 3 },
+	{ label = "dismissed confirmation", options = { confirm = false }, calls = 3 },
+	{ label = "empty confirmation", options = { confirm = "" }, calls = 3 },
 }) do
 	local state = run(case.options)
 	assert_equal(case.calls, #state.calls, case.label .. " cancellation request count")
 	assert_equal({}, state.refreshes, case.label .. " cancellation refresh")
 	assert_equal({}, state.errors, case.label .. " cancellation errors")
+end
+
+do
+	local state = harness({ defer_confirmation = true })
+	state.controller:create()
+	assert_equal(3, #state.calls, "deferred Create stops at confirmation")
+	state.controller:invalidate()
+	state.answer_confirmation("y")
+	assert_equal(3, #state.calls, "invalidated Create confirmation cannot execute")
+	assert_equal({}, state.refreshes, "invalidated Create does not reconcile")
+	state.restore()
 end
 
 for _, missing in ipairs({ "workspace.create.options", "workspace.operations.completed" }) do
@@ -498,10 +520,11 @@ do
 end
 
 do
-	local state = run(nil, "delete")
+	local state = run({ confirm = "Y" }, "delete")
 	assert(state.confirmations[1].prompt:find("/workspace/Thing.cs", 1, true))
-	assert_equal("&Yes\n&No", state.confirmations[1].choices, "compact Delete choices")
-	assert_equal(2, state.confirmations[1].default, "Delete defaults to No")
+	assert(state.confirmations[1].prompt:find("Confirm [y/N]", 1, true))
+	assert_equal("N", state.confirmations[1].default, "Delete defaults to No")
+	assert_equal("confirmation", state.confirmations[1].kind, "Delete uses vim.ui.input")
 	assert_equal({
 		commandId = "workspace.delete",
 		targetNodeId = "selected-node",

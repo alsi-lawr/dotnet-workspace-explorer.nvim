@@ -568,30 +568,31 @@ function Selector:confirm()
 					rpc.problem("incompatible_preview", "The Add Existing command preview is incompatible.")
 				)
 			end
-			local confirmed = confirmation.yes_no(mutations.effects_prompt(preview))
-			if not self:_live(captured) then
-				return
-			end
-			self.confirming = false
-			if not confirmed then
-				return
-			end
-			local execute = vim.deepcopy(request)
-			execute.confirmationToken = preview.confirmationToken
-			self.executing = true
-			self.workspace:request("workspace/commands/execute", execute, function(execute_err, applied)
+			confirmation.yes_no(mutations.effects_prompt(preview), function(confirmed)
 				if not self:_live(captured) then
 					return
 				end
-				if execute_err then
-					return self:_fail(execute_err)
+				self.confirming = false
+				if not confirmed then
+					return
 				end
-				if not mutations.compatible_applied(applied) then
-					return self:_fail(
-						rpc.problem("incompatible_result", "The Add Existing result is incompatible.")
-					)
-				end
-				self:_exit(false, nil, applied.revision)
+				local execute = vim.deepcopy(request)
+				execute.confirmationToken = preview.confirmationToken
+				self.executing = true
+				self.workspace:request("workspace/commands/execute", execute, function(execute_err, applied)
+					if not self:_live(captured) then
+						return
+					end
+					if execute_err then
+						return self:_fail(execute_err)
+					end
+					if not mutations.compatible_applied(applied) then
+						return self:_fail(
+							rpc.problem("incompatible_result", "The Add Existing result is incompatible.")
+						)
+					end
+					self:_exit(false, nil, applied.revision)
+				end)
 			end)
 		end)
 	end)

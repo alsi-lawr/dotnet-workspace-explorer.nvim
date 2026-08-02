@@ -107,8 +107,8 @@ local function harness(options)
 			successes[#successes + 1] = revision
 		end,
 	})
-	local original_select, original_input, original_confirm =
-		vim.ui.select, vim.ui.input, vim.fn.confirm
+	local pending_confirmation
+	local original_select, original_input = vim.ui.select, vim.ui.input
 	vim.ui.select = function(items, _, callback)
 		if options.confirm == false then
 			callback(nil)
@@ -117,20 +117,23 @@ local function harness(options)
 		end
 	end
 	vim.ui.input = function(input_options, callback)
+		if input_options.kind == "confirmation" then
+			confirmations[#confirmations + 1] = vim.deepcopy(input_options)
+			if options.defer_confirmation then
+				pending_confirmation = callback
+			elseif options.rename_confirm == "cancel" then
+				callback(nil)
+			else
+				callback(options.rename_confirm == false and "n" or "y")
+			end
+			return
+		end
 		inputs[#inputs + 1] = vim.deepcopy(input_options)
 		if options.name == false then
 			callback(nil)
 		else
 			callback(options.name or "Renamed.fs")
 		end
-	end
-	vim.fn.confirm = function(prompt, choices, default)
-		confirmations[#confirmations + 1] = {
-			prompt = prompt,
-			choices = choices,
-			default = default,
-		}
-		return options.rename_confirm == false and 2 or 1
 	end
 	return {
 		editing = editing,
@@ -149,9 +152,14 @@ local function harness(options)
 		set_live = function(value)
 			live = value
 		end,
+		answer_confirmation = function(answer)
+			assert(pending_confirmation, "no confirmation callback is pending")
+			local callback = pending_confirmation
+			pending_confirmation = nil
+			callback(answer)
+		end,
 		restore = function()
-			vim.ui.select, vim.ui.input, vim.fn.confirm =
-				original_select, original_input, original_confirm
+			vim.ui.select, vim.ui.input = original_select, original_input
 		end,
 	}
 end
@@ -231,8 +239,9 @@ do
 	}, state.calls[2].parameters, "Rename exact preview envelope")
 	assert_equal(nil, state.calls[2].parameters.arguments.sourceNodeIds, "Rename has no source array")
 	assert(state.confirmations[1].prompt:find("/workspace/App.fsproj", 1, true))
-	assert_equal("&Yes\n&No", state.confirmations[1].choices, "compact Rename choices")
-	assert_equal(2, state.confirmations[1].default, "Rename defaults to No")
+	assert(state.confirmations[1].prompt:find("Confirm [y/N]", 1, true))
+	assert_equal("N", state.confirmations[1].default, "Rename defaults to No")
+	assert_equal("confirmation", state.confirmations[1].kind, "Rename uses vim.ui.input")
 	state.restore()
 end
 
@@ -241,6 +250,25 @@ do
 	state.editing:rename()
 	assert_equal(2, #state.calls, "cancelled Rename confirmation stops before execute")
 	assert_equal({}, state.successes, "cancelled Rename does not reconcile")
+	state.restore()
+end
+
+do
+	local state = harness({ name = "Feature.fs", rename_confirm = "cancel" })
+	state.editing:rename()
+	assert_equal(2, #state.calls, "dismissed Rename confirmation stops before execute")
+	assert_equal({}, state.successes, "dismissed Rename does not reconcile")
+	state.restore()
+end
+
+do
+	local state = harness({ name = "Feature.fs", defer_confirmation = true })
+	state.editing:rename()
+	assert_equal(2, #state.calls, "deferred Rename stops at confirmation")
+	state.editing:invalidate()
+	state.answer_confirmation("y")
+	assert_equal(2, #state.calls, "invalidated Rename confirmation cannot execute")
+	assert_equal({}, state.successes, "invalidated Rename does not reconcile")
 	state.restore()
 end
 

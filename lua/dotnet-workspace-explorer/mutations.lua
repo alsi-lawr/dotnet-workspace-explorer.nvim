@@ -376,12 +376,14 @@ function Mutations:_preview(request, execution)
 			})
 		end
 
-		if not confirmation.yes_no(effects_prompt(preview)) or not self:_live() then
-			return
-		end
-		local execute = vim.deepcopy(request)
-		execute.confirmationToken = preview.confirmationToken
-		self:_execute(execute, execution)
+		confirmation.yes_no(effects_prompt(preview), function(confirmed)
+			if not self:_live() or not confirmed then
+				return
+			end
+			local execute = vim.deepcopy(request)
+			execute.confirmationToken = preview.confirmationToken
+			self:_execute(execute, execution)
+		end)
 	end)
 end
 

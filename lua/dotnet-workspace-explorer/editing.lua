@@ -329,7 +329,9 @@ function Editing:_run(command_id, target_id, arguments, confirm, clear_marks, co
 				)
 			end
 			if compact then
-				run_execute(confirmation.yes_no(prompt(preview)) and confirm or nil)
+				confirmation.yes_no(prompt(preview), function(confirmed)
+					run_execute(confirmed and confirm or nil)
+				end)
 			else
 				vim.ui.select({ confirm, "Cancel" }, {
 					prompt = prompt(preview),

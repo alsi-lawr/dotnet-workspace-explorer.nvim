@@ -1,7 +1,13 @@
 local M = {}
 
-function M.yes_no(prompt)
-	return vim.fn.confirm(prompt, "&Yes\n&No", 2) == 1
+function M.yes_no(prompt, callback)
+	vim.ui.input({
+		prompt = prompt .. "\nConfirm [y/N]: ",
+		default = "N",
+		kind = "confirmation",
+	}, function(answer)
+		callback(type(answer) == "string" and answer:lower() == "y")
+	end)
 end
 
 return M

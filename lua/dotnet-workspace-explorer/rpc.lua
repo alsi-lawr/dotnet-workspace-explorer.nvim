@@ -10,18 +10,22 @@ local capabilities = {
 	"workspace.reset",
 	"workspace.create.options",
 	"workspace.addExisting.selector",
+	"workspace.addExisting.presentation.v2",
 	"workspace.commands.list",
 	"workspace.commands.describe",
 	"workspace.commands.preview",
 	"workspace.commands.execute",
 	"workspace.operations.completed",
 }
-local git_capability = "workspace.git.status"
+local git_capabilities = {
+	"workspace.git.status",
+	"workspace.git.status.v2",
+}
 local method_capabilities = {
 	["workspace/root"] = "workspace.root",
 	["workspace/children"] = "workspace.children",
 	["workspace/file/resolve"] = "workspace.file.resolve",
-	["workspace/git/status"] = git_capability,
+	["workspace/git/status"] = git_capabilities,
 	["workspace/refresh"] = "workspace.refresh",
 	["workspace/create/options"] = "workspace.create.options",
 	["workspace/addExisting/start"] = "workspace.addExisting.selector",
@@ -166,10 +170,17 @@ function Client:_send(method, parameters, callback, initializing)
 		return
 	end
 	local required = method_capabilities[method]
-	if required and not self.capabilities[required] then
+	local supported = type(required) ~= "table" and self.capabilities[required]
+	if type(required) == "table" then
+		for _, capability in ipairs(required) do
+			supported = supported or self.capabilities[capability]
+		end
+	end
+	if required and not supported then
+		local capability = type(required) == "table" and table.concat(required, " or ") or required
 		self:_deliver(
 			callback,
-			problem("unsupported_capability", "The server did not negotiate " .. required .. ".")
+			problem("unsupported_capability", "The server did not negotiate " .. capability .. ".")
 		)
 		return
 	end
@@ -334,7 +345,7 @@ function Client:start(callback)
 	self.process = process
 	local requested_capabilities = vim.deepcopy(capabilities)
 	if self.git_enabled then
-		requested_capabilities[#requested_capabilities + 1] = git_capability
+		vim.list_extend(requested_capabilities, git_capabilities)
 	end
 	local requested = {}
 	for _, name in ipairs(requested_capabilities) do

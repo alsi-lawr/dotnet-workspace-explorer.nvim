@@ -1,6 +1,9 @@
 local M = {}
+local git_states = require("dotnet-workspace-explorer.git_states")
 local Git = {}
 Git.__index = Git
+local legacy_capability = "workspace.git.status"
+local version_two_capability = "workspace.git.status.v2"
 
 local function integer(value)
 	return type(value) == "number" and value >= 0 and value % 1 == 0
@@ -20,7 +23,7 @@ local function exact_map(value, keys)
 	return count == vim.tbl_count(keys)
 end
 
-local function snapshot(result)
+local function snapshot(result, version_two)
 	if
 		not exact_map(result, {
 			available = true,
@@ -38,16 +41,19 @@ local function snapshot(result)
 	end
 	local decorations, seen = {}, {}
 	for _, decoration in ipairs(result.decorations) do
+		local keys = version_two and { nodeId = true, states = true } or { nodeId = true, state = true }
+		local states = version_two and git_states.normalize(decoration.states, false)
+			or git_states.legacy(decoration.state)
 		if
-			not exact_map(decoration, { nodeId = true, state = true })
+			not exact_map(decoration, keys)
 			or type(decoration.nodeId) ~= "string"
 			or decoration.nodeId == ""
-			or (decoration.state ~= "added" and decoration.state ~= "changed")
+			or not states
 			or seen[decoration.nodeId]
 		then
 			return nil
 		end
-		seen[decoration.nodeId], decorations[decoration.nodeId] = true, decoration.state
+		seen[decoration.nodeId], decorations[decoration.nodeId] = true, states
 	end
 	if not result.available and next(decorations) ~= nil then
 		return nil
@@ -74,6 +80,15 @@ function Git:_live()
 	return self.valid and self.enabled and self.is_live()
 end
 
+function Git:_capable()
+	return self.workspace:has_capability(version_two_capability)
+		or self.workspace:has_capability(legacy_capability)
+end
+
+function Git:_version_two()
+	return self.workspace:has_capability(version_two_capability)
+end
+
 function Git:_clear(render)
 	local changed = next(self.workspace.decorations or {}) ~= nil
 	self.workspace.decorations = {}
@@ -84,11 +99,7 @@ function Git:_clear(render)
 end
 
 function Git:start()
-	if
-		not self:_live()
-		or not self.workspace:has_capability("workspace.git.status")
-		or self.group
-	then
+	if not self:_live() or not self:_capable() or self.group then
 		return
 	end
 	self.group = vim.api.nvim_create_augroup("DotnetWorkspaceExplorerGit", { clear = true })
@@ -102,11 +113,7 @@ function Git:start()
 end
 
 function Git:request()
-	if
-		not self:_live()
-		or not self.workspace:has_capability("workspace.git.status")
-		or self.workspace.phase ~= "ready"
-	then
+	if not self:_live() or not self:_capable() or self.workspace.phase ~= "ready" then
 		return
 	end
 	if self.inflight then
@@ -123,7 +130,7 @@ function Git:request()
 				return
 			end
 			self.inflight = false
-			local decorations = not err and snapshot(result) or nil
+			local decorations = not err and snapshot(result, self:_version_two()) or nil
 			if err then
 				self.on_error(err)
 			elseif not decorations then

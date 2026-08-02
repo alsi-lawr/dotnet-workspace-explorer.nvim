@@ -30,7 +30,7 @@ local function defaults()
 			devicons = false,
 		},
 		git = {
-			enable = false,
+			enable = true,
 		},
 		width = 30,
 		glyphs = {

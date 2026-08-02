@@ -6,7 +6,7 @@ local fixture = assert(vim.env.DWE_FIXTURE, "DWE_FIXTURE is required")
 local fixture_root = vim.fs.dirname(fixture)
 local explorer = require("dotnet-workspace-explorer")
 local view = require("dotnet-workspace-explorer.view")
-local notification, desired_create_kind, desired_name
+local notification, desired_create_kind, desired_name, confirmation_result
 
 local function assert_equal(expected, actual, message)
 	assert(vim.deep_equal(expected, actual), message)
@@ -27,9 +27,17 @@ local function lines()
 	return vim.api.nvim_buf_get_lines(view.buf, 0, -1, false)
 end
 
+local function semantic_root(line)
+	return line and line:match("^S ") and line:find("SemanticStudio", 1, true)
+end
+
 local function select_matching(text)
+	local semantic_kind, semantic_name = text:match("^([SPDF]) (.+)$")
 	for index, line in ipairs(lines()) do
-		if line:find(text, 1, true) then
+		local semantic_match = semantic_name
+			and line:match("^%s*" .. semantic_kind .. " ")
+			and line:find(semantic_name, 1, true)
+		if line:find(text, 1, true) or semantic_match then
 			vim.api.nvim_win_set_cursor(view.win, { index, 0 })
 			return
 		end
@@ -82,6 +90,9 @@ vim.ui.input = function(_, callback)
 	desired_name = nil
 	callback(value)
 end
+vim.fn.confirm = function()
+	return confirmation_result or 1
+end
 
 explorer.setup({
 	command = core,
@@ -130,7 +141,7 @@ wait_for(function()
 	return false
 end, "root Add Existing selector did not open")
 select_matching("existing")
-explorer.expand()
+explorer.activate()
 for _, project in ipairs({
 	{ directory = "Root.CSharp", file = "Root.CSharp.csproj" },
 	{ directory = "Root.FSharp", file = "Root.FSharp.fsproj" },
@@ -175,7 +186,7 @@ explorer.expand()
 new_kind("addExisting")
 wait_for(function()
 	for _, line in ipairs(lines()) do
-		if line:find("F NOTES.md", 1, true) and not line:find("[a]", 1, true) then
+		if line:find("NOTES.md", 1, true) then
 			return true
 		end
 	end
@@ -183,10 +194,18 @@ wait_for(function()
 end, "solution-folder Add Existing selector did not open")
 select_matching("NOTES.md")
 explorer.new()
+confirmation_result = 2
+explorer.activate()
+assert(not semantic_root(lines()[1]), "cancelled Add Existing confirmation left the selector")
+confirmation_result = 1
 explorer.activate()
 wait_for(function()
-	for _, line in ipairs(lines()) do
-		if line:find("F NOTES.md", 1, true) and not line:find("[a]", 1, true) then
+	local current = lines()
+	if not semantic_root(current[1]) then
+		return false
+	end
+	for _, line in ipairs(current) do
+		if line:find("NOTES.md", 1, true) then
 			return true
 		end
 	end
@@ -207,8 +226,12 @@ select_matching("Loose.fs")
 explorer.new()
 explorer.activate()
 wait_for(function()
-	for _, line in ipairs(lines()) do
-		if line:find("F Loose.fs", 1, true) and not line:find("[a]", 1, true) then
+	local current = lines()
+	if not semantic_root(current[1]) then
+		return false
+	end
+	for _, line in ipairs(current) do
+		if line:find("Loose.fs", 1, true) then
 			return true
 		end
 	end
@@ -219,7 +242,7 @@ select_matching("D Foundation")
 new_kind("addExisting")
 wait_for(function()
 	local current = lines()
-	if current[1] and current[1]:find("S SemanticStudio", 1, true) then
+	if semantic_root(current[1]) then
 		return false
 	end
 	for _, line in ipairs(current) do
@@ -230,7 +253,7 @@ wait_for(function()
 	return false
 end, "project-folder Add Existing selector did not open")
 select_matching("Foundation")
-explorer.expand()
+explorer.activate()
 wait_for(function()
 	for _, line in ipairs(lines()) do
 		if line:find("LooseNested.fs", 1, true) then
@@ -243,8 +266,12 @@ select_matching("LooseNested.fs")
 explorer.new()
 explorer.activate()
 wait_for(function()
-	for _, line in ipairs(lines()) do
-		if line:find("F LooseNested.fs", 1, true) and not line:find("[a]", 1, true) then
+	local current = lines()
+	if not semantic_root(current[1]) then
+		return false
+	end
+	for _, line in ipairs(current) do
+		if line:find("LooseNested.fs", 1, true) then
 			return true
 		end
 	end
@@ -261,11 +288,11 @@ end
 new_kind("addExisting")
 wait_for(function()
 	local current = lines()
-	if current[1] and current[1]:find("S SemanticStudio", 1, true) then
+	if semantic_root(current[1]) then
 		return false
 	end
 	for _, line in ipairs(current) do
-		if line:find("Studio.FSharp", 1, true) and not line:find("P ", 1, true) then
+		if line:find("Studio.FSharp", 1, true) then
 			return true
 		end
 	end
@@ -293,7 +320,8 @@ assert(
 )
 assert(view.is_open(), "Edit closed the explorer")
 
-vim.ui.input = function(_, callback)
+vim.ui.input = function(options, callback)
+	assert(options.default == "Bootstrap.cs", "Rename did not default to the current node name")
 	callback("BootstrapRenamed.cs")
 end
 select_matching("Bootstrap.cs")
@@ -339,11 +367,11 @@ explorer.refresh()
 wait_for(function()
 	local actions, models, moved
 	for index, line in ipairs(lines()) do
-		if line:find("D Actions", 1, true) then
+		if line:find("Actions", 1, true) then
 			actions = index
-		elseif line:find("D Models", 1, true) then
+		elseif line:find("Models", 1, true) then
 			models = index
-		elseif line:find("F ProjectNode.cs", 1, true) then
+		elseif line:find("ProjectNode.cs", 1, true) then
 			moved = index
 		end
 	end
@@ -354,7 +382,7 @@ explorer.collapse_all()
 assert(#lines() == 1, "CollapseAll did not show one collapsed tree")
 explorer.git_refresh()
 wait_for(function()
-	return lines()[1]:match("[+~]$") ~= nil
+	return lines()[1]:find("★", 1, true) ~= nil or lines()[1]:find("✗", 1, true) ~= nil
 end, "opt-in Git status did not decorate the solution")
 
 assert(notification == nil, notification or "unexpected explorer error")

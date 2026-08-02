@@ -1,4 +1,5 @@
 local M = {}
+local confirmation = require("dotnet-workspace-explorer.confirmation")
 local Editing = {}
 Editing.__index = Editing
 
@@ -250,7 +251,7 @@ function Editing:reconcile()
 	end
 end
 
-function Editing:_run(command_id, target_id, arguments, confirm, clear_marks)
+function Editing:_run(command_id, target_id, arguments, confirm, clear_marks, compact)
 	if not self:_supports() then
 		return self:_fail({
 			code = "unsupported_capability",
@@ -297,18 +298,15 @@ function Editing:_run(command_id, target_id, arguments, confirm, clear_marks)
 					message = "The workspace command preview is incompatible.",
 				})
 			end
-			vim.ui.select({ confirm, "Cancel" }, {
-				prompt = prompt(preview),
-				kind = "confirmation",
-			}, function(choice)
+			local function run_execute(choice)
 				if not self:_live() or choice ~= confirm then
 					return
 				end
-				local execute = vim.deepcopy(request)
-				execute.confirmationToken = preview.confirmationToken
+				local execute_request = vim.deepcopy(request)
+				execute_request.confirmationToken = preview.confirmationToken
 				self.workspace:request(
 					"workspace/commands/execute",
-					execute,
+					execute_request,
 					function(execute_error, result)
 						if not self:_live() then
 							return
@@ -328,7 +326,15 @@ function Editing:_run(command_id, target_id, arguments, confirm, clear_marks)
 						self.on_success(result.revision)
 					end
 				)
-			end)
+			end
+			if compact then
+				run_execute(confirmation.yes_no(prompt(preview)) and confirm or nil)
+			else
+				vim.ui.select({ confirm, "Cancel" }, {
+					prompt = prompt(preview),
+					kind = "confirmation",
+				}, run_execute)
+			end
 		end)
 	end)
 end
@@ -338,14 +344,15 @@ function Editing:rename()
 		return
 	end
 	local target_id = self.selected()
-	if not target_id then
+	local node = target_id and self.workspace:get_node(target_id)
+	if not node then
 		return self:_fail({ code = "unknown_node", message = "Select a workspace node first." })
 	end
-	vim.ui.input({ prompt = "New name: " }, function(name)
+	vim.ui.input({ prompt = "New name: ", default = node.name }, function(name)
 		if not self:_live() or name == nil then
 			return
 		end
-		self:_run("workspace.rename", target_id, { name = name }, "Rename", false)
+		self:_run("workspace.rename", target_id, { name = name }, "Rename", false, true)
 	end)
 end
 

@@ -1,4 +1,5 @@
 local rpc = require("dotnet-workspace-explorer.rpc")
+local confirmation = require("dotnet-workspace-explorer.confirmation")
 
 local M = {}
 local Mutations = {}
@@ -360,7 +361,7 @@ function Mutations:_describe(command_id, target_id, target_kind, callback)
 	end)
 end
 
-function Mutations:_preview(request, destructive, execution)
+function Mutations:_preview(request, execution)
 	self.workspace:request("workspace/commands/preview", request, function(err, preview)
 		if not self:_live() then
 			return
@@ -375,18 +376,12 @@ function Mutations:_preview(request, destructive, execution)
 			})
 		end
 
-		local confirm = destructive and "Delete" or "Create"
-		vim.ui.select({ confirm, "Cancel" }, {
-			prompt = effects_prompt(preview),
-			kind = destructive and "warning" or "confirmation",
-		}, function(choice)
-			if not self:_live() or choice ~= confirm then
-				return
-			end
-			local execute = vim.deepcopy(request)
-			execute.confirmationToken = preview.confirmationToken
-			self:_execute(execute, execution)
-		end)
+		if not confirmation.yes_no(effects_prompt(preview)) or not self:_live() then
+			return
+		end
+		local execute = vim.deepcopy(request)
+		execute.confirmationToken = preview.confirmationToken
+		self:_execute(execute, execution)
 	end)
 end
 
@@ -514,7 +509,7 @@ function Mutations:create()
 						},
 						expectedRevision = revision,
 					}
-					self:_preview(request, false, option.execution)
+					self:_preview(request, option.execution)
 				end)
 			end)
 		end)
@@ -544,7 +539,7 @@ function Mutations:delete()
 			targetNodeId = target_id,
 			arguments = rpc.empty(),
 			expectedRevision = revision,
-		}, true, "transaction")
+		}, "transaction")
 	end)
 end
 

@@ -93,7 +93,7 @@ local obsolete_mapping = "add" .. "_file"
 assert(not pcall(public.setup, { mappings = { [obsolete_mapping] = "a" } }))
 
 public.setup({ command = root .. "/does-not-exist" })
-assert(config.get().git.enable == false, "Git does not default to disabled")
+assert(config.get().git.enable == true, "Git does not default to enabled")
 view.open()
 view.mappings(public)
 local defaults = {}

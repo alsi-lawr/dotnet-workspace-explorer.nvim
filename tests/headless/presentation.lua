@@ -140,6 +140,7 @@ end
 vim.api.nvim_set_hl(0, "DotnetWorkspaceExplorerFile", { link = "Error" })
 view.open()
 assert_equal(false, vim.wo[view.win].wrap, "explorer rows do not wrap")
+assert_equal("yes", vim.wo[view.win].signcolumn, "explorer reserves its selector sign column")
 assert_equal(
 	"Error",
 	vim.api.nvim_get_hl(0, {
@@ -181,9 +182,9 @@ view.render(tree)
 lines = vim.api.nvim_buf_get_lines(view.buf, 0, -1, false)
 assert_equal(1, loads, "enabled Devicons loads lazily")
 assert_equal({ "workspace.slnx", nil, { default = false } }, lookups[1], "solution lookup")
-assert_equal({ "README.md", nil, { default = false } }, lookups[2], "solution item lookup")
+assert_equal({ "README.md", nil, { default = true } }, lookups[2], "solution item lookup")
 assert_equal({ "project.csproj", nil, { default = false } }, lookups[3], "project lookup")
-assert_equal({ "Multi\r\n\tName.fs", nil, { default = false } }, lookups[4], "project file lookup")
+assert_equal({ "Multi\r\n\tName.fs", nil, { default = true } }, lookups[4], "project file lookup")
 assert(lines[1]:find(" Example.slnx", 1, true), "solution Devicon")
 assert(lines[2]:find(" Source", 1, true), "open directory icon")
 assert(lines[3]:find(" README.md", 1, true), "solution item Devicon")
@@ -194,32 +195,41 @@ assert(lines[8]:find(" FSharp.Core (10.0.0)", 1, true), "NuGet Devicon")
 assert(not lines[6]:find("- ", 1, true), "file row omits the leaf prefix")
 
 tree.mark_mode, tree.marks = "move", { ["project-file"] = true }
-tree.decorations = { ["project-file"] = "added", project = "changed" }
+tree.decorations = {
+	["project-file"] = { "staged", "unstaged", "renamed", "deleted" },
+	project = { "unmerged", "untracked", "ignored" },
+}
 highlights = {}
 view.render(tree)
 lines = vim.api.nvim_buf_get_lines(view.buf, 0, -1, false)
-assert(lines[4]:match(" ~$"), "changed suffix follows project name")
-assert(lines[6]:match(" %[m%] %+$"), "Git suffix follows the mark suffix")
-local mark_highlight, added_highlight, changed_highlight
+assert(
+	lines[4]:find("󰪮 ★◌ Example.fsproj", 1, true),
+	"ordered Git glyphs sit between project icon and name"
+)
+assert(
+	lines[6]:find(" ✓✗➜ Multi\tName.fs [m]", 1, true),
+	"ordered Git glyphs precede the authoritative file name"
+)
+local mark_highlight, staged_highlight, ignored_highlight
 for _, item in ipairs(highlights) do
 	if item[1] == "DotnetWorkspaceExplorerMark" then
 		mark_highlight = item
-	elseif item[1] == "DotnetWorkspaceExplorerGitAdded" then
-		added_highlight = item
-	elseif item[1] == "DotnetWorkspaceExplorerGitChanged" then
-		changed_highlight = item
+	elseif item[1] == "DotnetWorkspaceExplorerGitStaged" then
+		staged_highlight = item
+	elseif item[1] == "DotnetWorkspaceExplorerGitIgnored" then
+		ignored_highlight = item
 	end
 end
-assert(mark_highlight and added_highlight and changed_highlight, "mark and Git suffix highlights")
+assert(mark_highlight and staged_highlight and ignored_highlight, "mark and Git glyph highlights")
 assert_equal(
 	"DiffAdd",
-	vim.api.nvim_get_hl(0, { name = "DotnetWorkspaceExplorerGitAdded", link = true }).link,
-	"added suffix follows theme"
+	vim.api.nvim_get_hl(0, { name = "DotnetWorkspaceExplorerGitStaged", link = true }).link,
+	"staged glyph follows theme"
 )
 assert_equal(
-	"DiffChange",
-	vim.api.nvim_get_hl(0, { name = "DotnetWorkspaceExplorerGitChanged", link = true }).link,
-	"changed suffix follows theme"
+	"Comment",
+	vim.api.nvim_get_hl(0, { name = "DotnetWorkspaceExplorerGitIgnored", link = true }).link,
+	"ignored glyph follows theme"
 )
 tree.mark_mode, tree.marks, tree.decorations = nil, {}, {}
 
@@ -232,6 +242,17 @@ end
 assert(icon_range, "project file Devicon highlight")
 assert_equal(#"", icon_range[4] - icon_range[3], "Devicon byte range length")
 assert_equal("", lines[6]:sub(icon_range[3] + 1, icon_range[4]), "Devicon byte range contents")
+
+package.loaded["nvim-web-devicons"] = {
+	get_icon = function(_, _, options)
+		if options.default then
+			return "", "DevIconDefault"
+		end
+	end,
+}
+view.render(tree)
+lines = vim.api.nvim_buf_get_lines(view.buf, 0, -1, false)
+assert(lines[6]:find(" Multi\tName.fs", 1, true), "unknown file uses generic Devicon")
 
 for _, fallback in ipairs({
 	function()
@@ -262,6 +283,18 @@ assert_equal("          Version: 10.0.0", lines[9], "dependency property omits a
 assert_equal(0, notifications, "fallbacks stay silent")
 
 vim.api.nvim_buf_add_highlight = add_highlight
+vim.notify = original_notify
+
+local failed_message
+vim.notify = function(message)
+	failed_message = message
+end
+view.failure({ message = "The requested action failed." })
+assert_equal(
+	"The requested action failed.",
+	failed_message,
+	"failure omits refresh instruction suffix"
+)
 vim.notify = original_notify
 
 view.close()
@@ -328,7 +361,7 @@ package.loaded["dotnet-workspace-explorer.workspace"] = {
 	},
 }
 local explorer = require("dotnet-workspace-explorer")
-explorer.setup({ presentation = { devicons = false } })
+explorer.setup({ presentation = { devicons = false }, git = { enable = false } })
 local original_window = vim.api.nvim_get_current_win()
 explorer.open("Example.slnx")
 

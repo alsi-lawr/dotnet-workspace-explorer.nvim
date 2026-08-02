@@ -75,7 +75,8 @@ end
 
 local function harness(options)
 	options = options or {}
-	local calls, errors, refreshes, selections, inputs, add_existing = {}, {}, {}, {}, {}, {}
+	local calls, errors, refreshes, selections, inputs, confirmations, add_existing =
+		{}, {}, {}, {}, {}, {}, {}
 	local capabilities = {
 		["workspace.create.options"] = true,
 		["workspace.commands.describe"] = true,
@@ -142,7 +143,8 @@ local function harness(options)
 		end,
 	})
 
-	local original_select, original_input = vim.ui.select, vim.ui.input
+	local original_select, original_input, original_confirm =
+		vim.ui.select, vim.ui.input, vim.fn.confirm
 	vim.ui.select = function(items, select_options, callback)
 		selections[#selections + 1] = {
 			items = vim.deepcopy(items),
@@ -154,12 +156,6 @@ local function harness(options)
 			else
 				callback(items[options.pick or 1])
 			end
-		else
-			local choice = options.confirm
-			if choice == nil then
-				choice = select_options.kind == "warning" and "Delete" or "Create"
-			end
-			callback(choice == false and nil or choice)
 		end
 	end
 	vim.ui.input = function(input_options, callback)
@@ -170,6 +166,14 @@ local function harness(options)
 			callback(options.name or "Thing.cs")
 		end
 	end
+	vim.fn.confirm = function(prompt, choices, default)
+		confirmations[#confirmations + 1] = {
+			prompt = prompt,
+			choices = choices,
+			default = default,
+		}
+		return (options.confirm == "Cancel" or options.confirm == false) and 2 or 1
+	end
 
 	return {
 		controller = controller,
@@ -179,12 +183,14 @@ local function harness(options)
 		refreshes = refreshes,
 		selections = selections,
 		inputs = inputs,
+		confirmations = confirmations,
 		add_existing = add_existing,
 		set_live = function(value)
 			live = value
 		end,
 		restore = function()
-			vim.ui.select, vim.ui.input = original_select, original_input
+			vim.ui.select, vim.ui.input, vim.fn.confirm =
+				original_select, original_input, original_confirm
 		end,
 	}
 end
@@ -310,7 +316,9 @@ do
 		state.calls[3].parameters.confirmationToken,
 		"preview request remains unchanged"
 	)
-	assert(state.selections[2].options.prompt:find("/workspace/App.csproj", 1, true))
+	assert(state.confirmations[1].prompt:find("/workspace/App.csproj", 1, true))
+	assert_equal("&Yes\n&No", state.confirmations[1].choices, "compact Create choices")
+	assert_equal(2, state.confirmations[1].default, "Create defaults to No")
 	assert_equal({ 8 }, state.refreshes, "synchronous creation refreshes once")
 	assert_equal({}, state.errors, "successful creation errors")
 end
@@ -491,8 +499,9 @@ end
 
 do
 	local state = run(nil, "delete")
-	assert_equal("warning", state.selections[1].options.kind, "Delete confirmation is destructive")
-	assert(state.selections[1].options.prompt:find("/workspace/Thing.cs", 1, true))
+	assert(state.confirmations[1].prompt:find("/workspace/Thing.cs", 1, true))
+	assert_equal("&Yes\n&No", state.confirmations[1].choices, "compact Delete choices")
+	assert_equal(2, state.confirmations[1].default, "Delete defaults to No")
 	assert_equal({
 		commandId = "workspace.delete",
 		targetNodeId = "selected-node",
@@ -563,10 +572,15 @@ do
 		"Add Existing selector capability was not requested"
 	)
 	assert(
+		requested["workspace.addExisting.presentation.v2"],
+		"Add Existing presentation v2 capability was not requested"
+	)
+	assert(
 		requested["workspace.operations.completed"],
 		"operation-completion capability was not requested"
 	)
 	assert(not requested["workspace.git.status"], "disabled Git capability was requested")
+	assert(not requested["workspace.git.status.v2"], "disabled Git v2 capability was requested")
 	client:stop("test_complete", true)
 end
 
@@ -617,6 +631,7 @@ do
 		requested[capability] = true
 	end
 	assert(requested["workspace.git.status"], "enabled Git capability was not requested")
+	assert(requested["workspace.git.status.v2"], "enabled Git v2 capability was not requested")
 	client:stop("test_complete", true)
 end
 

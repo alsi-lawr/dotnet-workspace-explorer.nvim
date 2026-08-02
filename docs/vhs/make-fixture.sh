@@ -172,4 +172,16 @@ printf 'namespace Studio.FSharp\\n\\nmodule Loose = let ready = true\\n' \
 printf 'namespace Studio.FSharp\\n\\nmodule LooseNested = let ready = true\\n' \
 	>"$fixture/src/Studio.FSharp/Foundation/LooseNested.fs"
 
+git -C "$fixture" init --quiet
+git -C "$fixture" add .
+git -C "$fixture" \
+	-c user.name='Workspace Explorer Fixture' \
+	-c user.email='workspace-explorer@example.invalid' \
+	commit --quiet -m 'Create workspace explorer fixture'
+printf 'Staged fixture change.\n' >>"$fixture/NOTES.md"
+git -C "$fixture" add NOTES.md
+printf 'Unstaged fixture change.\n' >>"$fixture/NOTES.md"
+printf 'namespace Studio.CSharp; internal sealed class Untracked { }\n' \
+	>"$fixture/src/Studio.CSharp/Untracked.cs"
+
 printf '%s\n' "$fixture/SemanticStudio.slnx"

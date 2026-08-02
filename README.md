@@ -79,27 +79,29 @@ create, delete, refresh, and close. Dependencies expand into compact, read-only 
 Studio-inspired reference properties, including available package and assembly versions.
 
 New includes logical Solution Folders where the selected context supports them. Add Existing opens
-a temporary core-backed selector in the same drawer: `a` marks eligible files, `<CR>` previews and
-confirms the batch, `l`/`h` browse opaque directories, and `q` or Escape cancels. The semantic tree
-returns with its mappings and semantic selection restored; cancellation leaves it unchanged.
+a temporary core-backed selector in the same drawer: `<CR>` expands or collapses directories and
+confirms marked files from a file row, `a` marks eligible files, and `q` or Escape cancels. The
+semantic tree returns with its mappings and semantic selection restored; cancellation leaves it
+unchanged.
 
 Every action is also available through its `DotnetWorkspaceExplorer*` command and public Lua
 function. Mappings can be replaced or disabled individually; `clear_marks` and `git_refresh` have
 no default key.
 
-Git suffixes are opt-in:
+Git decorations are enabled by default. Disable them when a session does not need repository state:
 
 ```lua
 require("dotnet-workspace-explorer").setup({
 	git = {
-		enable = true,
+		enable = false,
 	},
 })
 ```
 
-After enabling Git for an open explorer, run `:DotnetWorkspaceExplorerRefresh` to negotiate a fresh
-session. Added nodes show `+`; other working-tree changes show `~`. Status updates are event-driven,
-and `:DotnetWorkspaceExplorerGitRefresh` requests one explicitly.
+After changing Git configuration for an open explorer, run `:DotnetWorkspaceExplorerRefresh` to
+negotiate a fresh session. Theme-linked glyphs distinguish staged `✓`, unstaged `✗`, renamed `➜`,
+deleted ``, unmerged ``, untracked `★`, and ignored `◌` state before each affected name. Status
+updates are event-driven, and `:DotnetWorkspaceExplorerGitRefresh` requests one explicitly.
 
 ## Why this explorer
 

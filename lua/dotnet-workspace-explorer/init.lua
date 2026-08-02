@@ -309,7 +309,7 @@ end
 
 function M.activate()
 	if selector and selector:is_engaged() then
-		return selector:confirm()
+		return selector:activate()
 	end
 	local id = tree and view.selected(tree)
 	local node = id and tree:get_node(id)

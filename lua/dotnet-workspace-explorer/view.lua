@@ -1,4 +1,5 @@
 local config = require("dotnet-workspace-explorer.config")
+local git_states = require("dotnet-workspace-explorer.git_states")
 
 local M = { rows = {}, owned_mappings = {} }
 local ns = vim.api.nvim_create_namespace("dotnet-workspace-explorer")
@@ -12,8 +13,15 @@ local links = {
 	DependencyProperty = "Comment",
 	File = "Normal",
 	Mark = "Special",
-	GitAdded = "DiffAdd",
-	GitChanged = "DiffChange",
+	SelectorTarget = "Special",
+	SelectorExisting = "DiffAdd",
+	GitStaged = "DiffAdd",
+	GitUnstaged = "DiffChange",
+	GitRenamed = "DiffChange",
+	GitDeleted = "DiffDelete",
+	GitUnmerged = "DiffText",
+	GitUntracked = "DiffAdd",
+	GitIgnored = "Comment",
 }
 local kinds = {
 	workspace = { glyph = "solution", group = "Solution", devicon = "workspace.slnx" },
@@ -81,6 +89,13 @@ local function write(lines, rows)
 				highlight.finish
 			)
 		end
+		if row.sign then
+			vim.api.nvim_buf_set_extmark(M.buf, ns, index - 1, 0, {
+				sign_text = row.sign.text,
+				sign_hl_group = row.sign.group,
+				priority = 20,
+			})
+		end
 	end
 end
 
@@ -103,9 +118,10 @@ local function presentation_icon(node, kind, fallback, expanded)
 	if fixed then
 		return fixed
 	end
+	local file = node.kind == "file" or node.kind == "projectFile" or node.kind == "solutionItem"
 	local extension = node.kind == "file" and node.icon_hint or nil
 	local found, icon, group =
-		pcall(devicons.get_icon, kind.devicon or node.name, extension, { default = false })
+		pcall(devicons.get_icon, kind.devicon or node.name, extension, { default = file })
 	if found and type(icon) == "string" and icon ~= "" and type(group) == "string" then
 		return icon, group
 	end
@@ -133,7 +149,7 @@ function M.open()
 		M.win = vim.api.nvim_get_current_win()
 		vim.api.nvim_win_set_buf(M.win, M.buf)
 		vim.api.nvim_win_set_width(M.win, options.width)
-		vim.wo[M.win].cursorline, vim.wo[M.win].wrap = true, false
+		vim.wo[M.win].cursorline, vim.wo[M.win].wrap, vim.wo[M.win].signcolumn = true, false, "yes"
 		vim.api.nvim_set_current_win(current)
 		start_editor_tracking()
 	end
@@ -334,6 +350,24 @@ function M.selected_selector(selector)
 	return selector.selected_id
 end
 
+local function append_git(prefix, highlights, states, icon_present)
+	if not states or #states == 0 then
+		return prefix .. (icon_present and " " or "")
+	end
+	if prefix ~= "" and not prefix:match("%s$") then
+		prefix = prefix .. " "
+	end
+	for _, presentation in ipairs(git_states.presentation) do
+		if vim.tbl_contains(states, presentation.name) then
+			local start = #prefix
+			prefix = prefix .. presentation.glyph
+			highlights[#highlights + 1] =
+				span("DotnetWorkspaceExplorer" .. presentation.group, start, start + #presentation.glyph)
+		end
+	end
+	return prefix .. " "
+end
+
 function M.render_selector(selector)
 	if not valid("buf", M.buf) then
 		return
@@ -364,26 +398,33 @@ function M.render_selector(selector)
 				span("DotnetWorkspaceExplorerDisclosure", disclosure_start, disclosure_start + #disclosure)
 		end
 		local icon_start = #prefix
-		local separator = icon ~= "" and " " or ""
-		local name_start = icon_start + #icon + #separator
-		local line = prefix .. icon .. separator .. name
+		prefix = prefix .. icon
 		if icon ~= "" then
 			highlights[#highlights + 1] =
 				span(icon_group or "DotnetWorkspaceExplorer" .. kind.group, icon_start, icon_start + #icon)
 		end
+		prefix = append_git(prefix, highlights, entry.git_states, icon ~= "")
+		local name_start = #prefix
+		local line = prefix .. name
 		highlights[#highlights + 1] =
 			span("DotnetWorkspaceExplorer" .. kind.group, name_start, name_start + #name)
-		if selector.marks[id] then
-			local mark_start = #line
-			line = line .. " [a]"
-			highlights[#highlights + 1] = span("DotnetWorkspaceExplorerMark", mark_start, mark_start + 4)
-		end
+		local sign = selector.marks[id]
+				and {
+					text = "󰆤",
+					group = "DotnetWorkspaceExplorerSelectorTarget",
+				}
+			or entry.availability == "alreadyPresent" and {
+				text = "✓",
+				group = "DotnetWorkspaceExplorerSelectorExisting",
+			}
+			or nil
 		lines[#lines + 1], rows[#rows + 1] =
 			line, {
 				id = id,
 				depth = depth,
 				ancestors = parents,
 				highlights = highlights,
+				sign = sign,
 			}
 		by_id[id] = #rows
 		if selector.expanded[id] then
@@ -452,13 +493,14 @@ function M.render(tree, restoration)
 				span("DotnetWorkspaceExplorerDisclosure", disclosure_start, disclosure_start + #mark)
 		end
 		local icon_start = #prefix
-		local separator = icon ~= "" and " " or ""
-		local name_start = icon_start + #icon + #separator
-		local line = prefix .. icon .. separator .. name
+		prefix = prefix .. icon
 		if icon ~= "" then
 			highlights[#highlights + 1] =
 				span(icon_group or "DotnetWorkspaceExplorer" .. kind.group, icon_start, icon_start + #icon)
 		end
+		prefix = append_git(prefix, highlights, tree.decorations and tree.decorations[id], icon ~= "")
+		local name_start = #prefix
+		local line = prefix .. name
 		highlights[#highlights + 1] =
 			span("DotnetWorkspaceExplorer" .. kind.group, name_start, name_start + #name)
 		if tree.marks and tree.marks[id] then
@@ -467,18 +509,6 @@ function M.render(tree, restoration)
 			line = line .. suffix
 			highlights[#highlights + 1] =
 				span("DotnetWorkspaceExplorerMark", mark_start, mark_start + #suffix)
-		end
-		local decoration = tree.decorations and tree.decorations[id]
-		if decoration then
-			local suffix = decoration == "added" and " +" or " ~"
-			local decoration_start = #line
-			line = line .. suffix
-			highlights[#highlights + 1] = span(
-				decoration == "added" and "DotnetWorkspaceExplorerGitAdded"
-					or "DotnetWorkspaceExplorerGitChanged",
-				decoration_start,
-				decoration_start + #suffix
-			)
 		end
 		lines[#lines + 1] = line
 		rows[#rows + 1] = {
@@ -536,7 +566,6 @@ end
 function M.failure(problem)
 	local text = type(problem) == "table" and problem.message or problem
 	text = tostring(text or "Workspace operation failed."):gsub("[\r\n]+", " "):sub(1, 100)
-	text = text .. " — :DotnetWorkspaceExplorerRefresh"
 	if M.good or not valid("buf", M.buf) then
 		vim.notify(text, vim.log.levels.ERROR, { title = "Workspace Explorer" })
 	else

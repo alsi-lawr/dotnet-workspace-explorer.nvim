@@ -1,5 +1,7 @@
 local mutations = require("dotnet-workspace-explorer.mutations")
 local rpc = require("dotnet-workspace-explorer.rpc")
+local confirmation = require("dotnet-workspace-explorer.confirmation")
+local git_states = require("dotnet-workspace-explorer.git_states")
 
 local M = {}
 local Selector = {}
@@ -31,16 +33,26 @@ local function nonempty(value)
 	return type(value) == "string" and value ~= ""
 end
 
-local function normalize_entry(value, parent_id)
+local availability_values = {
+	available = true,
+	alreadyPresent = true,
+	ineligible = true,
+}
+
+local function normalize_entry(value, parent_id, presentation_version_two)
+	local keys = {
+		entryId = true,
+		displayName = true,
+		kind = true,
+		expandable = true,
+		selectable = true,
+		iconHint = false,
+	}
+	if presentation_version_two then
+		keys.availability, keys.gitStates = true, true
+	end
 	if
-		not exact_keys(value, {
-			entryId = true,
-			displayName = true,
-			kind = true,
-			expandable = true,
-			selectable = true,
-			iconHint = false,
-		})
+		not exact_keys(value, keys)
 		or not nonempty(value.entryId)
 		or not nonempty(value.displayName)
 		or (value.kind ~= "directory" and value.kind ~= "file")
@@ -52,6 +64,21 @@ local function normalize_entry(value, parent_id)
 	then
 		return nil
 	end
+	local availability = value.selectable and "available" or "ineligible"
+	local states = {}
+	if presentation_version_two then
+		states = git_states.normalize(value.gitStates, true)
+		if
+			not states
+			or not availability_values[value.availability]
+			or (value.kind == "directory" and value.availability ~= "ineligible")
+			or (value.selectable ~= (value.availability == "available"))
+			or (value.availability == "alreadyPresent" and value.kind ~= "file")
+		then
+			return nil
+		end
+		availability = value.availability
+	end
 	return {
 		id = value.entryId,
 		parent_id = parent_id,
@@ -60,6 +87,8 @@ local function normalize_entry(value, parent_id)
 		expandable = value.expandable,
 		selectable = value.selectable,
 		icon_hint = value.iconHint,
+		availability = availability,
+		git_states = states,
 	}
 end
 
@@ -149,10 +178,10 @@ function Selector:_page_size()
 	return self.workspace.client.limits.maxPageSize
 end
 
-local function add_entries(values, parent_id, entries, ids)
+local function add_entries(values, parent_id, entries, ids, presentation_version_two)
 	local page_ids = {}
 	for index, value in ipairs(values) do
-		local entry = normalize_entry(value, parent_id)
+		local entry = normalize_entry(value, parent_id, presentation_version_two)
 		if not entry or ids[entry.id] then
 			return nil
 		end
@@ -216,6 +245,7 @@ function Selector:_exit(close, problem, revision, resume)
 	self.closing_generation = nil
 	self.selector_id, self.entries, self.children, self.expanded = nil, nil, nil, nil
 	self.marks, self.mark_order, self.tokens, self.loading = nil, nil, nil, nil
+	self.presentation_version_two = nil
 	if resume ~= false then
 		self.on_resume(revision)
 	end
@@ -249,7 +279,8 @@ function Selector:_collect(parent_id, token, entries, ids, collected, captured, 
 		if not valid_page(result, self.selector_id, parent_id, self.revision, self:_page_size()) then
 			return self:_fail(incompatible("The selector children response is incompatible."))
 		end
-		local page_ids = add_entries(result.entries, parent_id, entries, ids)
+		local page_ids =
+			add_entries(result.entries, parent_id, entries, ids, self.presentation_version_two)
 		if not page_ids or not self:_next_token(result.nextToken) then
 			return self:_fail(incompatible("The selector page contains duplicate opaque state."))
 		end
@@ -279,6 +310,8 @@ function Selector:start(options)
 	self.on_suspend()
 	self.target_id, self.target_kind, self.revision =
 		options.target_id, options.target_kind, options.revision
+	self.presentation_version_two =
+		self.workspace:has_capability("workspace.addExisting.presentation.v2")
 	self.entries, self.children, self.expanded, self.marks, self.loading = {}, {}, {}, {}, {}
 	self.mark_order, self.tokens = {}, {}
 	self.workspace:request("workspace/addExisting/start", {
@@ -296,7 +329,7 @@ function Selector:start(options)
 		if not valid_start(result, options.revision, self:_page_size()) then
 			return self:_fail(incompatible("The selector start response is incompatible."))
 		end
-		local root = normalize_entry(result.root, nil)
+		local root = normalize_entry(result.root, nil, self.presentation_version_two)
 		if
 			not root
 			or root.kind ~= "directory"
@@ -310,7 +343,8 @@ function Selector:start(options)
 		self.expires_at_utc, self.max_selection_count = result.expiresAtUtc, 256
 		self.entries[root.id] = root
 		local ids = { [root.id] = true }
-		local collected = add_entries(result.entries, root.id, self.entries, ids)
+		local collected =
+			add_entries(result.entries, root.id, self.entries, ids, self.presentation_version_two)
 		if not collected or not self:_next_token(result.nextToken) then
 			return self:_fail(incompatible("The selector start page contains duplicate opaque state."))
 		end
@@ -350,9 +384,17 @@ function Selector:toggle()
 	end
 	local id = self.on_selected(self)
 	local entry = id and self.entries[id]
-	if not entry or entry.kind ~= "file" or not entry.selectable then
+	if not entry then
 		return self.on_error(
-			rpc.problem("not_selectable", "Select an eligible file before toggling it.")
+			rpc.problem("missing_selector_entry", "Select a file before marking it for Add Existing.")
+		)
+	end
+	if entry.kind == "directory" or entry.availability == "alreadyPresent" then
+		return
+	end
+	if entry.kind ~= "file" or entry.availability ~= "available" or not entry.selectable then
+		return self.on_error(
+			rpc.problem("not_selectable", "The selected file is not eligible for Add Existing.")
 		)
 	end
 	if self.marks[id] then
@@ -391,7 +433,7 @@ function Selector:_load(id, captured)
 		if not valid_page(result, self.selector_id, id, self.revision, self:_page_size()) then
 			return self:_fail(incompatible("The selector children response is incompatible."))
 		end
-		local page_ids = add_entries(result.entries, id, entries, ids)
+		local page_ids = add_entries(result.entries, id, entries, ids, self.presentation_version_two)
 		if not page_ids or not self:_next_token(result.nextToken) then
 			return self:_fail(incompatible("The selector page contains duplicate opaque state."))
 		end
@@ -408,6 +450,26 @@ function Selector:_load(id, captured)
 			self.on_render(self)
 		end)
 	end)
+end
+
+function Selector:activate()
+	if not self:is_active() then
+		return
+	end
+	local id = self.on_selected(self)
+	local entry = id and self.entries[id]
+	if not entry then
+		return self.on_error(
+			rpc.problem("missing_selector_entry", "Select a selector entry before activating it.")
+		)
+	end
+	if entry.kind == "directory" then
+		if self.expanded[id] then
+			return self:collapse()
+		end
+		return self:expand()
+	end
+	self:confirm()
 end
 
 function Selector:expand()
@@ -450,7 +512,12 @@ function Selector:confirm()
 	end
 	self.on_selected(self)
 	if #self.mark_order == 0 then
-		return self.on_error(rpc.problem("empty_selection", "Select at least one file to add."))
+		return self.on_error(
+			rpc.problem(
+				"empty_selection",
+				"Press a on an available file to mark it before confirming Add Existing."
+			)
+		)
 	end
 	local captured = self.generation
 	local request = {
@@ -490,34 +557,30 @@ function Selector:confirm()
 					rpc.problem("incompatible_preview", "The Add Existing command preview is incompatible.")
 				)
 			end
-			vim.ui.select({ "Add Existing", "Cancel" }, {
-				prompt = mutations.effects_prompt(preview),
-				kind = "confirmation",
-			}, function(choice)
+			local confirmed = confirmation.yes_no(mutations.effects_prompt(preview))
+			if not self:_live(captured) then
+				return
+			end
+			self.confirming = false
+			if not confirmed then
+				return
+			end
+			local execute = vim.deepcopy(request)
+			execute.confirmationToken = preview.confirmationToken
+			self.executing = true
+			self.workspace:request("workspace/commands/execute", execute, function(execute_err, applied)
 				if not self:_live(captured) then
 					return
 				end
-				self.confirming = false
-				if choice ~= "Add Existing" then
-					return
+				if execute_err then
+					return self:_fail(execute_err)
 				end
-				local execute = vim.deepcopy(request)
-				execute.confirmationToken = preview.confirmationToken
-				self.executing = true
-				self.workspace:request("workspace/commands/execute", execute, function(execute_err, applied)
-					if not self:_live(captured) then
-						return
-					end
-					if execute_err then
-						return self:_fail(execute_err)
-					end
-					if not mutations.compatible_applied(applied) then
-						return self:_fail(
-							rpc.problem("incompatible_result", "The Add Existing result is incompatible.")
-						)
-					end
-					self:_exit(false, nil, applied.revision)
-				end)
+				if not mutations.compatible_applied(applied) then
+					return self:_fail(
+						rpc.problem("incompatible_result", "The Add Existing result is incompatible.")
+					)
+				end
+				self:_exit(false, nil, applied.revision)
 			end)
 		end)
 	end)

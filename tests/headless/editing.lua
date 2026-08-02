@@ -43,11 +43,12 @@ end
 
 local function harness(options)
 	options = options or {}
-	local selected, calls, errors, renders, successes = "file-a", {}, {}, 0, {}
+	local selected, calls, errors, renders, successes, inputs, confirmations =
+		"file-a", {}, {}, 0, {}, {}, {}
 	local nodes = {
-		["file-a"] = { id = "file-a", kind = "projectFile" },
-		["file-b"] = { id = "file-b", kind = "projectFile" },
-		destination = { id = "destination", kind = "projectFolder" },
+		["file-a"] = { id = "file-a", kind = "projectFile", name = "FileA.fs" },
+		["file-b"] = { id = "file-b", kind = "projectFile", name = "FileB.fs" },
+		destination = { id = "destination", kind = "projectFolder", name = "Destination" },
 	}
 	local capabilities = {
 		["workspace.commands.describe"] = true,
@@ -101,7 +102,8 @@ local function harness(options)
 			successes[#successes + 1] = revision
 		end,
 	})
-	local original_select, original_input = vim.ui.select, vim.ui.input
+	local original_select, original_input, original_confirm =
+		vim.ui.select, vim.ui.input, vim.fn.confirm
 	vim.ui.select = function(items, _, callback)
 		if options.confirm == false then
 			callback(nil)
@@ -109,12 +111,21 @@ local function harness(options)
 			callback(items[1])
 		end
 	end
-	vim.ui.input = function(_, callback)
+	vim.ui.input = function(input_options, callback)
+		inputs[#inputs + 1] = vim.deepcopy(input_options)
 		if options.name == false then
 			callback(nil)
 		else
 			callback(options.name or "Renamed.fs")
 		end
+	end
+	vim.fn.confirm = function(prompt, choices, default)
+		confirmations[#confirmations + 1] = {
+			prompt = prompt,
+			choices = choices,
+			default = default,
+		}
+		return options.rename_confirm == false and 2 or 1
 	end
 	return {
 		editing = editing,
@@ -122,6 +133,8 @@ local function harness(options)
 		calls = calls,
 		errors = errors,
 		successes = successes,
+		inputs = inputs,
+		confirmations = confirmations,
 		renders = function()
 			return renders
 		end,
@@ -132,7 +145,8 @@ local function harness(options)
 			live = value
 		end,
 		restore = function()
-			vim.ui.select, vim.ui.input = original_select, original_input
+			vim.ui.select, vim.ui.input, vim.fn.confirm =
+				original_select, original_input, original_confirm
 		end,
 	}
 end
@@ -203,6 +217,7 @@ end
 do
 	local state = harness({ name = "Feature.fs" })
 	state.editing:rename()
+	assert_equal({ prompt = "New name: ", default = "FileA.fs" }, state.inputs[1], "Rename input")
 	assert_equal({
 		commandId = "workspace.rename",
 		targetNodeId = "file-a",
@@ -210,6 +225,17 @@ do
 		expectedRevision = 9,
 	}, state.calls[2].parameters, "Rename exact preview envelope")
 	assert_equal(nil, state.calls[2].parameters.arguments.sourceNodeIds, "Rename has no source array")
+	assert(state.confirmations[1].prompt:find("/workspace/App.fsproj", 1, true))
+	assert_equal("&Yes\n&No", state.confirmations[1].choices, "compact Rename choices")
+	assert_equal(2, state.confirmations[1].default, "Rename defaults to No")
+	state.restore()
+end
+
+do
+	local state = harness({ name = "Feature.fs", rename_confirm = false })
+	state.editing:rename()
+	assert_equal(2, #state.calls, "cancelled Rename confirmation stops before execute")
+	assert_equal({}, state.successes, "cancelled Rename does not reconcile")
 	state.restore()
 end
 

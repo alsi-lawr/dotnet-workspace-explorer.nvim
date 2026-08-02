@@ -94,14 +94,16 @@ local function harness(options)
 	local reconciliation = {}
 	local selected = "file-1"
 	local live = true
+	local presentation_version_two = options.presentation_version_two ~= false
 	local workspace = {
 		client = { limits = { maxPageSize = options.page_size or 2 } },
 	}
 	workspace.has_capability = function(_, name)
 		return (name == "workspace.addExisting.selector" and options.capability ~= false)
+			or (name == "workspace.addExisting.presentation.v2" and presentation_version_two)
 			or (
-				name == "workspace.addExisting.presentation.v2"
-				and options.presentation_version_two ~= false
+				name == "workspace.addExisting.directories.v1"
+				and options.directory_selection_version_one == true
 			)
 	end
 	workspace.request = function(_, method, parameters, callback)
@@ -539,6 +541,61 @@ scenario(
 		assert_equal("selection_limit", state.errors[#state.errors].code, "limit error")
 	end
 )
+
+scenario("whole-directory marks keep Enter expansion and apply latest-overlap-wins", function()
+	local state = harness({
+		directory_selection_version_one = true,
+		request = function(method, parameters, callback)
+			if method == "workspace/addExisting/start" then
+				callback(
+					nil,
+					start_page({
+						entry("directory-1", "src", "directory", true, true, "folder"),
+						entry("file-1", "Root.cs", "file", false, true, "cs"),
+					})
+				)
+				return true
+			elseif
+				method == "workspace/addExisting/children" and parameters.parentEntryId == "directory-1"
+			then
+				callback(nil, {
+					revision = 7,
+					selectorId = "selector-1",
+					parentEntryId = "directory-1",
+					entries = {
+						entry("nested-file", "Nested.cs", "file", false, true, "cs"),
+					},
+				})
+				return true
+			end
+		end,
+	})
+	state.start()
+	assert_equal(true, state.selector.directory_selection_version_one, "capability is retained")
+
+	state.select("directory-1")
+	state.selector:toggle()
+	assert_equal({ "directory-1" }, state.selector.mark_order, "Space marks a directory")
+
+	state.selector:activate()
+	assert_equal(true, state.selector.expanded["directory-1"], "Enter expands a marked directory")
+	assert_equal(true, state.selector.marks["directory-1"], "expansion preserves the directory mark")
+
+	state.select("nested-file")
+	state.selector:toggle()
+	assert_equal({ "nested-file" }, state.selector.mark_order, "later descendant replaces ancestor")
+	assert_equal(nil, state.selector.marks["directory-1"], "ancestor mark is removed")
+
+	state.select("directory-1")
+	state.selector:toggle()
+	assert_equal({ "directory-1" }, state.selector.mark_order, "later directory replaces descendant")
+	assert_equal(nil, state.selector.marks["nested-file"], "descendant mark is removed")
+
+	state.selector:activate()
+	assert_equal(nil, state.selector.expanded["directory-1"], "Enter collapses a marked directory")
+	assert_equal(true, state.selector.marks["directory-1"], "collapse preserves the directory mark")
+	assert_equal({}, state.errors, "directory selection and expansion stay error-free")
+end)
 
 scenario("ineligible ordinary files explain the selected target rule", function()
 	local messages = {

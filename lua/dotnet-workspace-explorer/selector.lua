@@ -39,7 +39,12 @@ local availability_values = {
 	ineligible = true,
 }
 
-local function normalize_entry(value, parent_id, presentation_version_two)
+local function normalize_entry(
+	value,
+	parent_id,
+	presentation_version_two,
+	directory_selection_version_one
+)
 	local keys = {
 		entryId = true,
 		displayName = true,
@@ -59,7 +64,7 @@ local function normalize_entry(value, parent_id, presentation_version_two)
 		or type(value.expandable) ~= "boolean"
 		or type(value.selectable) ~= "boolean"
 		or (value.iconHint ~= nil and not nonempty(value.iconHint))
-		or (value.kind == "directory" and value.selectable)
+		or (value.kind == "directory" and value.selectable and not directory_selection_version_one)
 		or (value.kind == "file" and value.expandable)
 	then
 		return nil
@@ -71,7 +76,7 @@ local function normalize_entry(value, parent_id, presentation_version_two)
 		if
 			not states
 			or not availability_values[value.availability]
-			or (value.kind == "directory" and value.availability ~= "ineligible")
+			or (value.kind == "directory" and value.availability == "alreadyPresent")
 			or (value.selectable ~= (value.availability == "available"))
 			or (value.availability == "alreadyPresent" and value.kind ~= "file")
 		then
@@ -178,10 +183,18 @@ function Selector:_page_size()
 	return self.workspace.client.limits.maxPageSize
 end
 
-local function add_entries(values, parent_id, entries, ids, presentation_version_two)
+local function add_entries(
+	values,
+	parent_id,
+	entries,
+	ids,
+	presentation_version_two,
+	directory_selection_version_one
+)
 	local page_ids = {}
 	for index, value in ipairs(values) do
-		local entry = normalize_entry(value, parent_id, presentation_version_two)
+		local entry =
+			normalize_entry(value, parent_id, presentation_version_two, directory_selection_version_one)
 		if not entry or ids[entry.id] then
 			return nil
 		end
@@ -245,7 +258,7 @@ function Selector:_exit(close, problem, revision, resume)
 	self.closing_generation = nil
 	self.selector_id, self.entries, self.children, self.expanded = nil, nil, nil, nil
 	self.marks, self.mark_order, self.tokens, self.loading = nil, nil, nil, nil
-	self.presentation_version_two = nil
+	self.presentation_version_two, self.directory_selection_version_one = nil, nil
 	if resume ~= false then
 		self.on_resume(revision)
 	end
@@ -279,8 +292,14 @@ function Selector:_collect(parent_id, token, entries, ids, collected, captured, 
 		if not valid_page(result, self.selector_id, parent_id, self.revision, self:_page_size()) then
 			return self:_fail(incompatible("The selector children response is incompatible."))
 		end
-		local page_ids =
-			add_entries(result.entries, parent_id, entries, ids, self.presentation_version_two)
+		local page_ids = add_entries(
+			result.entries,
+			parent_id,
+			entries,
+			ids,
+			self.presentation_version_two,
+			self.directory_selection_version_one
+		)
 		if not page_ids or not self:_next_token(result.nextToken) then
 			return self:_fail(incompatible("The selector page contains duplicate opaque state."))
 		end
@@ -312,6 +331,8 @@ function Selector:start(options)
 		options.target_id, options.target_kind, options.revision
 	self.presentation_version_two =
 		self.workspace:has_capability("workspace.addExisting.presentation.v2")
+	self.directory_selection_version_one =
+		self.workspace:has_capability("workspace.addExisting.directories.v1")
 	self.entries, self.children, self.expanded, self.marks, self.loading = {}, {}, {}, {}, {}
 	self.mark_order, self.tokens = {}, {}
 	self.workspace:request("workspace/addExisting/start", {
@@ -329,7 +350,12 @@ function Selector:start(options)
 		if not valid_start(result, options.revision, self:_page_size()) then
 			return self:_fail(incompatible("The selector start response is incompatible."))
 		end
-		local root = normalize_entry(result.root, nil, self.presentation_version_two)
+		local root = normalize_entry(
+			result.root,
+			nil,
+			self.presentation_version_two,
+			self.directory_selection_version_one
+		)
 		if
 			not root
 			or root.kind ~= "directory"
@@ -343,8 +369,14 @@ function Selector:start(options)
 		self.expires_at_utc, self.max_selection_count = result.expiresAtUtc, 256
 		self.entries[root.id] = root
 		local ids = { [root.id] = true }
-		local collected =
-			add_entries(result.entries, root.id, self.entries, ids, self.presentation_version_two)
+		local collected = add_entries(
+			result.entries,
+			root.id,
+			self.entries,
+			ids,
+			self.presentation_version_two,
+			self.directory_selection_version_one
+		)
 		if not collected or not self:_next_token(result.nextToken) then
 			return self:_fail(incompatible("The selector start page contains duplicate opaque state."))
 		end
@@ -384,6 +416,23 @@ local eligibility_messages = {
 	project = "Only non-project files can be added to a project.",
 	projectFolder = "Only non-project files can be added to a project folder.",
 }
+local directory_eligibility_messages = {
+	workspace = "Only .NET project files or non-symbolic directories containing them can be added.",
+	solutionFolder = "Only projects, solution items, or non-symbolic directories can be added.",
+	project = "Only non-project files or non-symbolic directories can be added to a project.",
+	projectFolder = "Only non-project files or non-symbolic directories can be added here.",
+}
+
+function Selector:_is_descendant(id, ancestor_id)
+	local entry = self.entries[id]
+	while entry and entry.parent_id do
+		if entry.parent_id == ancestor_id then
+			return true
+		end
+		entry = self.entries[entry.parent_id]
+	end
+	return false
+end
 
 function Selector:toggle()
 	if not self:is_active() then
@@ -393,20 +442,28 @@ function Selector:toggle()
 	local entry = id and self.entries[id]
 	if not entry then
 		return self.on_error(
-			rpc.problem("missing_selector_entry", "Select a file before marking it for Add Existing.")
-		)
-	end
-	if entry.kind == "directory" or entry.availability == "alreadyPresent" then
-		return
-	end
-	if entry.kind ~= "file" or entry.availability ~= "available" or not entry.selectable then
-		return self.on_error(
 			rpc.problem(
-				"not_selectable",
-				eligibility_messages[self.target_kind]
-					or "The selected file cannot be added to this workspace node."
+				"missing_selector_entry",
+				"Select a file or directory before marking it for Add Existing."
 			)
 		)
+	end
+	if entry.availability == "alreadyPresent" then
+		return
+	end
+	if entry.kind == "directory" and not self.directory_selection_version_one then
+		return
+	end
+	if
+		(entry.kind ~= "file" and entry.kind ~= "directory")
+		or entry.availability ~= "available"
+		or not entry.selectable
+	then
+		local messages = self.directory_selection_version_one and directory_eligibility_messages
+			or eligibility_messages
+		local message = messages[self.target_kind]
+			or "The selected entry cannot be added to this workspace node."
+		return self.on_error(rpc.problem("not_selectable", message))
 	end
 	if self.marks[id] then
 		self.marks[id] = nil
@@ -416,9 +473,24 @@ function Selector:toggle()
 				break
 			end
 		end
-	elseif #self.mark_order >= self.max_selection_count then
-		return self.on_error(rpc.problem("selection_limit", "The selector accepts at most 256 files."))
 	else
+		local retained = {}
+		for _, marked_id in ipairs(self.mark_order) do
+			local marked = self.entries[marked_id]
+			local overlaps = (entry.kind == "directory" and self:_is_descendant(marked_id, id))
+				or (marked and marked.kind == "directory" and self:_is_descendant(id, marked_id))
+			if overlaps then
+				self.marks[marked_id] = nil
+			else
+				retained[#retained + 1] = marked_id
+			end
+		end
+		self.mark_order = retained
+		if #self.mark_order >= self.max_selection_count then
+			return self.on_error(
+				rpc.problem("selection_limit", "The selector accepts at most 256 items.")
+			)
+		end
 		self.marks[id], self.mark_order[#self.mark_order + 1] = true, id
 	end
 	self.on_render(self)
@@ -444,7 +516,14 @@ function Selector:_load(id, captured)
 		if not valid_page(result, self.selector_id, id, self.revision, self:_page_size()) then
 			return self:_fail(incompatible("The selector children response is incompatible."))
 		end
-		local page_ids = add_entries(result.entries, id, entries, ids, self.presentation_version_two)
+		local page_ids = add_entries(
+			result.entries,
+			id,
+			entries,
+			ids,
+			self.presentation_version_two,
+			self.directory_selection_version_one
+		)
 		if not page_ids or not self:_next_token(result.nextToken) then
 			return self:_fail(incompatible("The selector page contains duplicate opaque state."))
 		end
@@ -526,7 +605,7 @@ function Selector:confirm()
 		return self.on_error(
 			rpc.problem(
 				"empty_selection",
-				"Press Space on an available file to mark it before confirming Add Existing."
+				"Press Space on an available file or directory before confirming Add Existing."
 			)
 		)
 	end

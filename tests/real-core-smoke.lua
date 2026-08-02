@@ -228,7 +228,7 @@ assert(not lines()[1]:find("◌", 1, true), "ignored state propagated to the sel
 select_matching("NOTES.md")
 local_mapping("<Space>").callback()
 assert_equal(
-	"Only .csproj, .fsproj, or .vbproj project files can be added to the solution.",
+	"Only .NET project files or non-symbolic directories containing them can be added.",
 	notification,
 	"root ineligible file did not explain project-only eligibility"
 )
@@ -249,18 +249,9 @@ for _, project in ipairs({
 		return false
 	end, "root project directory did not appear: " .. project.directory)
 	select_matching(project.directory)
-	explorer.expand()
-	wait_for(function()
-		for _, line in ipairs(lines()) do
-			if line:find(project.file, 1, true) then
-				return true
-			end
-		end
-		return false
-	end, "root project did not appear: " .. project.file)
-	select_matching(project.file)
 	local_mapping("<Space>").callback()
 end
+select_matching("NOTES.md")
 explorer.activate()
 wait_for(function()
 	local found = {}
@@ -346,6 +337,7 @@ wait_for(function()
 	return false
 end, "project-folder Add Existing selector did not open")
 select_matching("Foundation")
+local_mapping("<Space>").callback()
 explorer.activate()
 wait_for(function()
 	for _, line in ipairs(lines()) do
@@ -356,7 +348,6 @@ wait_for(function()
 	return false
 end, "nested project item did not appear")
 select_matching("LooseNested.fs")
-local_mapping("<Space>").callback()
 explorer.activate()
 wait_for(function()
 	local current = lines()

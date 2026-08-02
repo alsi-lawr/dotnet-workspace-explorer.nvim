@@ -56,9 +56,9 @@ preservation of expanded paths and deep selection.
 The editing probe covers exact rename/move/copy envelopes and mark lifecycle. The Git probe covers
 conditional status negotiation, freshness, coalescing, cleanup, and decoration replacement. The
 tree-action probe covers project-file resolution plus atomic full expansion and collapse.
-The selector probe covers the transient Add Existing protocol, opaque paging and marks, modal
-mapping restoration, callback invalidation, action routing, semantic-state restoration, and
-optional Devicons states.
+The selector probe covers the transient Add Existing protocol, opaque paging, whole-directory and
+file marks, latest-wins overlap, modal mapping restoration, callback invalidation, action routing,
+semantic-state restoration, and optional Devicons states.
 
 After creating a disposable fixture under `.agent-workspace`, the bounded real-core probe accepts
 explicit paths:

@@ -11,6 +11,7 @@ local capabilities = {
 	"workspace.create.options",
 	"workspace.addExisting.selector",
 	"workspace.addExisting.presentation.v2",
+	"workspace.addExisting.directories.v1",
 	"workspace.commands.list",
 	"workspace.commands.describe",
 	"workspace.commands.preview",

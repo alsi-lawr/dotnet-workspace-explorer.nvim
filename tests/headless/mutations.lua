@@ -599,6 +599,10 @@ do
 		"Add Existing presentation v2 capability was not requested"
 	)
 	assert(
+		requested["workspace.addExisting.directories.v1"],
+		"Add Existing directory-selection capability was not requested"
+	)
+	assert(
 		requested["workspace.operations.completed"],
 		"operation-completion capability was not requested"
 	)

@@ -10,6 +10,9 @@ vim.o.laststatus = 2
 vim.o.more = false
 vim.o.showmode = false
 vim.o.termguicolors = true
+vim.o.wrap = false
+vim.cmd("filetype plugin indent on")
+vim.cmd("syntax enable")
 
 local position = assert(vim.env.DWE_POSITION, "DWE_POSITION is required")
 assert(position == "left" or position == "right", "DWE_POSITION must be left or right")

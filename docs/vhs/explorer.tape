@@ -20,78 +20,65 @@ Set MarginFill "docs/vhs/window-shadow.png"
 
 Set Framerate 30
 Set PlaybackSpeed 1
-Set TypingSpeed 1ms
+Set TypingSpeed 40ms
 Set CursorBlink false
 
 Hide
 Type "DWE_POSITION=left nvim -u docs/vhs/init.lua -i NONE --noplugin"
 Enter
-Sleep 7s
+Sleep 5s
 Type ":DotnetWorkspaceExplorerFocus"
 Enter
 Sleep 1s
-Type "l"
-Sleep 4s
-Type "/src"
-Enter
-Type "l"
-Sleep 3s
-Type "/Applications"
-Enter
-Type "l"
-Sleep 3s
-Type "/Studio.CSharp"
-Enter
-Type "l"
-Sleep 4s
-Type "l"
-Sleep 3s
-Type "/src"
-Enter
-Type "l"
-Sleep 3s
-Type "/Applications"
-Enter
-Type "l"
-Sleep 3s
-Type "/Studio.CSharp"
-Enter
-Type "l"
-Sleep 4s
-Type "/Dependencies"
-Enter
-Type "l"
+Show
 Sleep 2s
-Type "/Actions"
-Enter
+
 Type "l"
+Sleep 1s
+Type "j"
+Sleep 400ms
+Type "l"
+Sleep 1s
+Type "j"
+Sleep 400ms
+Type "l"
+Sleep 1s
+Type "j"
+Sleep 400ms
+Type "l"
+Sleep 1200ms
+Type "jj"
+Sleep 600ms
+Type "l"
+Sleep 1s
+Type "j"
+Sleep 400ms
+Enter
 Sleep 2s
-Type ":nohlsearch"
-Enter
-Type "gg"
-Ctrl+l
-Sleep 1s
-Show
-Sleep 4s
 
-Hide
-Ctrl+d
-Ctrl+d
-Ctrl+l
-Sleep 1s
-Show
-Sleep 4s
-
-Hide
-Type "gg"
-Type ":wincmd L"
+Type ":DotnetWorkspaceExplorerFocus"
 Enter
-Ctrl+l
 Sleep 1s
-Show
-Sleep 4s
+Type "k"
+Sleep 400ms
+Type "k"
+Sleep 400ms
+Type "l"
+Sleep 1500ms
+Type "jjjj"
+Sleep 1200ms
+Type "gg"
+Sleep 600ms
+Type "G"
+Sleep 1200ms
+Type "gg"
+Sleep 800ms
+Type "4j"
+Sleep 400ms
+Ctrl+l
+Sleep 400ms
 Screenshot docs/assets/explorer.png
-Sleep 2s
+Sleep 3s
 
 Hide
 Type ":qa!"

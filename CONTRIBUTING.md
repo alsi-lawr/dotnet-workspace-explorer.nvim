@@ -60,12 +60,11 @@ The selector probe covers the transient Add Existing protocol, opaque paging, wh
 file marks, latest-wins overlap, modal mapping restoration, callback invalidation, action routing,
 semantic-state restoration, and optional Devicons states.
 
-After creating a disposable fixture under `.agent-workspace`, the bounded real-core probe accepts
-explicit paths:
+The bounded real-core probe accepts explicit paths to a disposable fixture:
 
 ```sh
-DWE_CORE=/path/to/Dotnet.WorkspaceExplorer \
-DWE_FIXTURE="$PWD/.agent-workspace/real-core/fixture/SemanticStudio.slnx" \
+DWE_CORE=/path/to/dotnet-we \
+DWE_FIXTURE="${TMPDIR:-/tmp}/dwe-real-core/fixture/SemanticStudio.slnx" \
 nvim -u NONE -i NONE --noplugin --headless \
   --cmd "set runtimepath^=$PWD" -l tests/real-core-smoke.lua
 ```
@@ -90,23 +89,22 @@ The retained explorer assets use the real Release core, an explicit `nvim-web-de
 and the repository owner's VHS fork:
 
 ```sh
-docs/vhs/make-fixture.sh
-dotnet build ../dotnet-workspace-explorer/Dotnet.WorkspaceExplorer.slnx \
-  --configuration Release --no-restore
-mkdir -p .agent-workspace/visual
+capture_root="${TMPDIR:-/tmp}/dwe-nvim-showcase"
+DWE_CAPTURE_ROOT="$capture_root" docs/vhs/make-fixture.sh
+mkdir -p "$capture_root"
+nix build github:alsi-lawr/dotnet-workspace-explorer \
+  --out-link "$capture_root/core"
 plugin_root="$PWD"
-(cd ../vhs && go build -o "$plugin_root/.agent-workspace/visual/vhs" .)
+(cd ../vhs && go build -o "$capture_root/vhs" .)
 
-core="$PWD/../dotnet-workspace-explorer/src/WorkspaceExplorer/bin/Release/net10.0"
-DWE_CORE="$core/Dotnet.WorkspaceExplorer" \
-  DWE_FIXTURE="$PWD/.agent-workspace/visual/fixture/SemanticStudio.slnx" \
+DWE_CORE="$capture_root/core/bin/dotnet-we" \
+  DWE_FIXTURE="$capture_root/fixture/SemanticStudio.slnx" \
   DWE_DEVICONS="$HOME/.local/share/nvim/lazy/nvim-web-devicons" \
   VHS_NO_SANDBOX=1 \
-  .agent-workspace/visual/vhs --capture-mode=webgl docs/vhs/explorer.tape
+  "$capture_root/vhs" --capture-mode=webgl docs/vhs/explorer.tape
 ```
 
-If the core checkout uses a different directory, update the two core paths. Keep generated fixtures
-and capture binaries under `.agent-workspace`; only the final PNG and WebP belong in `docs/assets`.
+Only the final PNG and WebP belong in `docs/assets`.
 
 ## Pull requests
 

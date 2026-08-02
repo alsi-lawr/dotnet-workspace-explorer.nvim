@@ -2,13 +2,13 @@
 set -euo pipefail
 
 root=$(git rev-parse --show-toplevel)
-scratch=${DWE_SCRATCH_ROOT:-"$root/.agent-workspace/visual"}
-fixture="$scratch/fixture"
+capture_root=${DWE_CAPTURE_ROOT:-"${TMPDIR:-/tmp}/dwe-nvim-showcase"}
+fixture="$capture_root/fixture"
 
-case "$fixture" in
-	"$root"/.agent-workspace/*) ;;
-	*) echo "fixture must stay under $root/.agent-workspace" >&2; exit 1 ;;
-esac
+if [[ -z "$capture_root" || "$capture_root" == "/" ]]; then
+	echo "DWE_CAPTURE_ROOT must name a disposable directory" >&2
+	exit 1
+fi
 
 rm -rf "$fixture"
 mkdir -p \
@@ -85,6 +85,17 @@ do
 	printf 'namespace Studio.CSharp.Actions; internal sealed class %s { }\\n' "$name" \
 		>"$fixture/src/Studio.CSharp/Actions/$name.cs"
 done
+cat >"$fixture/src/Studio.CSharp/Actions/AddDocument.cs" <<'EOF'
+namespace Studio.CSharp.Actions;
+
+internal sealed class AddDocument
+{
+    public WorkspaceChange Preview(Project project, string path)
+    {
+        return project.AddDocument(path);
+    }
+}
+EOF
 for name in ProjectNode SolutionNode WorkspaceNode; do
 	printf 'namespace Studio.CSharp.Models; internal sealed record %s;\\n' "$name" \
 		>"$fixture/src/Studio.CSharp/Models/$name.cs"

@@ -1,135 +1,137 @@
 <div align="center">
 
-<img src="docs/assets/dotnet-workspace-explorer.svg" width="128" alt="Explorer logo">
+<img src="docs/assets/dotnet-workspace-explorer.svg"
+     width="128"
+     alt="dotnet-workspace-explorer.nvim logo">
 
 # dotnet-workspace-explorer.nvim
 
 **A Visual Studio-inspired .NET solution explorer for Neovim.**
 
 <a href="#status">
-<img alt="Experimental" src="https://img.shields.io/badge/status-experimental-f59e0b">
+  <img src="https://img.shields.io/badge/status-experimental-f5a97f"
+       alt="Experimental status">
 </a>
-<a href="#quick-start">
-<img alt="Neovim 0.12+" src="https://img.shields.io/badge/Neovim-0.12%2B-57A143?logo=neovim">
+<a href="https://neovim.io/">
+  <img src="https://img.shields.io/badge/Neovim-0.12%2B-57A143?logo=neovim"
+       alt="Neovim 0.12 or newer">
 </a>
-<a href="https://github.com/alsi-lawr/dotnet-workspace-explorer">
-<img alt=".NET core" src="https://img.shields.io/badge/core-.NET-512bd4?logo=dotnet">
+<a href="https://www.nuget.org/packages/ALSI.WorkspaceExplorer">
+  <img src="https://img.shields.io/nuget/v/ALSI.WorkspaceExplorer?label=core"
+       alt="NuGet core version">
 </a>
 <a href="LICENSE">
-<img alt="MIT" src="https://img.shields.io/badge/license-MIT-22c55e">
+  <img src="https://img.shields.io/badge/license-MIT-blue"
+       alt="MIT licence">
 </a>
 
 </div>
 
-See your .NET solution the way it was organised, not flattened into a generic file browser. Browse
-projects, solution folders, source files, references, and NuGet packages across C#, F#, and Visual
-Basic in a familiar, fully scrollable tree.
+Browse .NET solutions as solutions: solution folders, projects, files, dependencies, package and
+assembly versions, and Git state across C#, F#, and Visual Basic.
 
 <div align="center">
 
-<img src="docs/assets/explorer.webp" alt=".NET solution explorer in Neovim">
+<img src="docs/assets/explorer.webp"
+     alt="The explorer navigating a multi-project .NET solution">
 
 </div>
 
-## Quick start
+## Requirements
 
-You need Neovim 0.12+ and the
-[`Dotnet.WorkspaceExplorer`](https://github.com/alsi-lawr/dotnet-workspace-explorer) tool:
+- Neovim 0.12 or newer
+- [`dotnet-we`](https://github.com/alsi-lawr/dotnet-workspace-explorer)
+- [`nvim-web-devicons`](https://github.com/nvim-tree/nvim-web-devicons), if you want file icons
 
-```console
-dotnet tool install --global Dotnet.WorkspaceExplorer
+## Install
+
+Install the core with Nix:
+
+```sh
+nix profile install github:alsi-lawr/dotnet-workspace-explorer
 ```
 
-The installed command is `dotnet-we`. The
-[getting-started guide](../../wiki/Getting-Started) also covers source builds.
+Or install it from NuGet:
 
-With [lazy.nvim](https://github.com/folke/lazy.nvim):
+```sh
+dotnet tool install --global ALSI.WorkspaceExplorer
+```
+
+Then install the plugin. With
+[`lazy.nvim`](https://github.com/folke/lazy.nvim):
 
 ```lua
 {
-	"alsi-lawr/dotnet-workspace-explorer.nvim",
-	dependencies = {
-		"nvim-tree/nvim-web-devicons",
-	},
-	config = function()
-		require("nvim-web-devicons").setup()
-		require("dotnet-workspace-explorer").setup({
-			presentation = {
-				devicons = true,
-			},
-		})
-	end,
+  "alsi-lawr/dotnet-workspace-explorer.nvim",
+  dependencies = {
+    "nvim-tree/nvim-web-devicons",
+  },
+  opts = {
+    position = "left", -- "left" or "right"
+    width = 50,
+    presentation = {
+      devicons = true,
+    },
+  },
 }
 ```
 
-Open the solution selected from the current directory:
+The plugin starts `dotnet-we workspace <target> --pipe`. No extra command setting is needed when
+`dotnet-we` is on your `PATH`.
+
+## Open a workspace
 
 ```vim
-:DotnetWorkspaceExplorerOpen
+:DotnetWorkspaceExplorerToggle
+:DotnetWorkspaceExplorerOpen /path/to/MySolution.slnx
 ```
 
-Or pass a specific `.sln`, `.slnx`, or read-only `.slnf` target:
+Without a path, the explorer looks for a solution or project in the current directory.
 
-```vim
-:DotnetWorkspaceExplorerOpen /path/to/Demo.slnx
-```
+## Key actions
 
-The explorer opens on the left by default. Use `<CR>` to expand or collapse containers and open
-files in the previous editor window. Use `e` to edit a project file, `r` to rename, `m` or `c` to
-mark nodes for a move or copy, and `p` to place the marked batch. `E` expands the complete solution
-and `W` collapses it. The existing `l`, `h`, `a`, `d`, `R`, and `q` mappings expand, collapse,
-create, delete, refresh, and close. Dependencies expand into compact, read-only Visual
-Studio-inspired reference properties, including available package and assembly versions.
+| Key | Action |
+| --- | --- |
+| `<CR>` or `l` | Open or expand |
+| `h` | Collapse |
+| `a` | Add a file, directory, project, or solution item |
+| `e` | Open a project file |
+| `r` | Rename |
+| `m`, then `p` | Move and place |
+| `c`, then `p` | Copy and paste |
+| `d` | Delete |
+| `E` / `W` | Expand all / collapse all |
+| `R` | Refresh |
+| `q` | Close |
 
-New includes logical Solution Folders where the selected context supports them. Add Existing opens
-a temporary core-backed selector in the same drawer: `<CR>` expands or collapses directories and
-confirms from a file row, Space marks eligible files or whole directories, and `q` or Escape
-cancels. The semantic tree returns with its mappings and semantic selection restored; cancellation
-leaves it unchanged.
+Actions are also available as commands, so every mapping can be changed or removed.
 
-Every action is also available through its `DotnetWorkspaceExplorer*` command and public Lua
-function. Mappings can be replaced or disabled individually; `clear_marks` and `git_refresh` have
-no default key.
+## Why use it?
 
-Git decorations are enabled by default. Disable them when a session does not need repository state:
-
-```lua
-require("dotnet-workspace-explorer").setup({
-	git = {
-		enable = false,
-	},
-})
-```
-
-After changing Git configuration for an open explorer, run `:DotnetWorkspaceExplorerRefresh` to
-negotiate a fresh session. Theme-linked glyphs distinguish staged `✓`, unstaged `✗`, renamed `➜`,
-deleted ``, unmerged ``, untracked `★`, and ignored `◌` state before each affected name. Status
-updates are event-driven, and `:DotnetWorkspaceExplorerGitRefresh` requests one explicitly.
-
-## Why this explorer
-
-- **Solution-aware:** the .NET core owns the hierarchy rather than asking Lua to infer it.
-- **Theme-native:** semantic highlights follow the active colorscheme; Devicons are optional.
-- **Editor-native:** the explorer is an ordinary split with normal Neovim scrolling and movement.
-- **Mutation-safe:** creation, deletion, rename, and marked move/copy batches are fully previewed,
-  explicitly confirmed, and applied by the core.
+- See solution folders and project structure rather than a flat file tree.
+- Inspect project, package, framework, assembly, and project-reference dependencies.
+- Keep the current selection and expanded branches while the workspace changes.
+- Use the same explorer across C#, F#, and Visual Basic solutions.
 
 ## Documentation
 
-- [Getting started](../../wiki/Getting-Started)
-- [Configuration](../../wiki/Configuration)
-- [Commands and mappings](../../wiki/Commands-and-Mappings)
-- [Recovery and limitations](../../wiki/Recovery-and-Limitations)
+- [Getting started][getting-started]
+- [Configuration][configuration]
+- [Commands and mappings][commands]
+- [Recovery and limitations][r]
 
 ## Status
 
-The plugin is experimental and does not yet have a tagged release.
+The plugin is experimental and has no tagged release yet. Commands and configuration may change
+before the first release.
 
-## Contributing
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development, testing, and showcase capture instructions.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the development shell, checks, repository boundaries, and
-visual-capture workflow.
+## Licence
 
-## License
+[MIT](LICENSE)
 
-MIT. See [LICENSE](LICENSE).
+[getting-started]: https://github.com/alsi-lawr/dotnet-workspace-explorer.nvim/wiki/Getting-Started
+[configuration]: https://github.com/alsi-lawr/dotnet-workspace-explorer.nvim/wiki/Configuration
+[commands]: https://github.com/alsi-lawr/dotnet-workspace-explorer.nvim/wiki/Commands-and-Mappings
+[r]: https://github.com/alsi-lawr/dotnet-workspace-explorer.nvim/wiki/Recovery-and-Limitations

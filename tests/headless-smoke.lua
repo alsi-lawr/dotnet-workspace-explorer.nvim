@@ -5,6 +5,7 @@ local public = require("dotnet-workspace-explorer")
 local config = require("dotnet-workspace-explorer.config")
 local rpc = require("dotnet-workspace-explorer.rpc")
 local view = require("dotnet-workspace-explorer.view")
+assert(config.get().command == "dotnet-we", "installed core command default changed")
 local system, spawned = vim.system, 0
 vim.system = function(...)
 	spawned = spawned + 1

@@ -33,11 +33,15 @@ Basic in a familiar, fully scrollable tree.
 
 ## Quick start
 
-You need Neovim 0.12+ and a built
-[`dotnet-workspace-explorer`](https://github.com/alsi-lawr/dotnet-workspace-explorer) executable.
-The core is not yet
-published to NuGet; the [getting-started guide](../../wiki/Getting-Started) covers the current
-source-build setup.
+You need Neovim 0.12+ and the
+[`Dotnet.WorkspaceExplorer`](https://github.com/alsi-lawr/dotnet-workspace-explorer) tool:
+
+```console
+dotnet tool install --global Dotnet.WorkspaceExplorer
+```
+
+The installed command is `dotnet-we`. The
+[getting-started guide](../../wiki/Getting-Started) also covers source builds.
 
 With [lazy.nvim](https://github.com/folke/lazy.nvim):
 
@@ -50,7 +54,6 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
 	config = function()
 		require("nvim-web-devicons").setup()
 		require("dotnet-workspace-explorer").setup({
-			command = "dotnet-workspace-explorer",
 			presentation = {
 				devicons = true,
 			},

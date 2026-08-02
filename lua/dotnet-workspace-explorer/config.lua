@@ -21,7 +21,7 @@ local mapping_names = {
 
 local function defaults()
 	return {
-		command = "dotnet-workspace-explorer",
+		command = "dotnet-we",
 		target = function()
 			return vim.fn.getcwd()
 		end,

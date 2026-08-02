@@ -15,6 +15,7 @@ local effect_operations = {
 	trash = true,
 	rename = true,
 	move = true,
+	moveInSolution = true,
 	copy = true,
 	addToProject = true,
 	removeFromProject = true,

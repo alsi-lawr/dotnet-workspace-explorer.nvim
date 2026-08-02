@@ -30,13 +30,17 @@ local function descriptor(command_id, target_kind)
 	}
 end
 
-local function preview()
+local function preview(operation)
 	return {
 		confirmationToken = "exact-token",
 		expiresAtUtc = "2026-07-31T00:00:00Z",
 		summary = "Apply workspace edit",
 		effects = {
-			{ operation = "modify", target = "/workspace/App.fsproj", recursive = false },
+			{
+				operation = operation or "modify",
+				target = "/workspace/App.fsproj",
+				recursive = false,
+			},
 		},
 	}
 end
@@ -78,7 +82,8 @@ local function harness(options)
 		if method == "workspace/commands/describe" then
 			callback(nil, descriptor(parameters.commandId, nodes[parameters.targetNodeId].kind))
 		elseif method == "workspace/commands/preview" then
-			callback(nil, preview())
+			local operation = parameters.commandId == "workspace.move" and "moveInSolution" or nil
+			callback(nil, preview(operation))
 		else
 			callback(nil, { applied = true, revision = 10 })
 		end
@@ -258,6 +263,13 @@ for _, case in ipairs({
 		label = "preview",
 		method = "workspace/commands/preview",
 		result = { confirmationToken = "only" },
+		code = "incompatible_preview",
+		calls = 2,
+	},
+	{
+		label = "unknown preview operation",
+		method = "workspace/commands/preview",
+		result = preview("futureOperation"),
 		code = "incompatible_preview",
 		calls = 2,
 	},

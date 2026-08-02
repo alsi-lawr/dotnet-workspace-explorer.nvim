@@ -27,17 +27,53 @@ local function lines()
 	return vim.api.nvim_buf_get_lines(view.buf, 0, -1, false)
 end
 
+local function file_contents(path)
+	return table.concat(vim.fn.readfile(path), "\n")
+end
+
 local function semantic_root(line)
 	return line and line:match("^S ") and line:find("SemanticStudio", 1, true)
 end
 
-local function select_matching(text)
+local function matches(line, text)
 	local semantic_kind, semantic_name = text:match("^([SPDF]) (.+)$")
-	for index, line in ipairs(lines()) do
-		local semantic_match = semantic_name
+	return line:find(text, 1, true)
+		or (
+			semantic_name
 			and line:match("^%s*" .. semantic_kind .. " ")
 			and line:find(semantic_name, 1, true)
-		if line:find(text, 1, true) or semantic_match then
+		)
+end
+
+local function nested_under(parent, child)
+	local current = lines()
+	local parent_index, parent_indent
+	for index, line in ipairs(current) do
+		if matches(line, parent) then
+			parent_index = index
+			parent_indent = #(line:match("^%s*") or "")
+			break
+		end
+	end
+	if not parent_index then
+		return false
+	end
+	for index = parent_index + 1, #current do
+		local line = current[index]
+		local indent = #(line:match("^%s*") or "")
+		if indent <= parent_indent then
+			return false
+		end
+		if matches(line, child) then
+			return true
+		end
+	end
+	return false
+end
+
+local function select_matching(text)
+	for index, line in ipairs(lines()) do
+		if matches(line, text) then
 			vim.api.nvim_win_set_cursor(view.win, { index, 0 })
 			return index
 		end
@@ -66,6 +102,26 @@ end
 local function new_kind(kind, name, display_name)
 	desired_create_kind, desired_name, desired_display_name = kind, name, display_name
 	explorer.new()
+end
+
+local function move_logical(source, destination, description)
+	local before = file_contents(fixture)
+	notification = nil
+	select_matching(source)
+	explorer.mark_move()
+	select_matching(destination)
+	explorer.place()
+	wait_for(function()
+		return notification ~= nil or file_contents(fixture) ~= before
+	end, description .. " did not execute")
+	vim.wait(250, function()
+		return notification ~= nil
+	end, 10)
+	assert_equal(nil, notification, description .. " reported an error")
+	explorer.expand_all()
+	wait_for(function()
+		return nested_under(destination, source)
+	end, description .. " did not reconcile beneath its destination")
 end
 
 vim.notify = function(message, level)
@@ -313,6 +369,20 @@ wait_for(function()
 	end
 	return false
 end, "project-folder item did not reconcile")
+
+select_matching("S SemanticStudio")
+new_kind("solutionFolder", "Move Target")
+wait_for(function()
+	for _, line in ipairs(lines()) do
+		if line:find("D Move Target", 1, true) then
+			return true
+		end
+	end
+	return false
+end, "logical move target did not reconcile")
+move_logical("P Root.CSharp", "D Move Target", "logical project move")
+move_logical("NOTES.md", "D Move Target", "logical solution-item move")
+move_logical("D Solution Items", "D Move Target", "logical Solution Folder move")
 
 select_matching("P Studio.FSharp")
 vim.api.nvim_win_set_width(view.win, 43)

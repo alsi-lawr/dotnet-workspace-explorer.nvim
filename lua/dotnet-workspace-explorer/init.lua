@@ -356,7 +356,7 @@ end
 
 function M.new()
 	if selector and selector:is_engaged() then
-		return selector:toggle()
+		return
 	end
 	if not mutations then
 		return fail({ message = "Open the workspace explorer before creating an item." })

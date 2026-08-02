@@ -80,7 +80,7 @@ Studio-inspired reference properties, including available package and assembly v
 
 New includes logical Solution Folders where the selected context supports them. Add Existing opens
 a temporary core-backed selector in the same drawer: `<CR>` expands or collapses directories and
-confirms marked files from a file row, `a` marks eligible files, and `q` or Escape cancels. The
+confirms marked files from a file row, Space marks eligible files, and `q` or Escape cancels. The
 semantic tree returns with its mappings and semantic selection restored; cancellation leaves it
 unchanged.
 

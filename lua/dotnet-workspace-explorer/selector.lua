@@ -378,6 +378,13 @@ function Selector:is_expandable(id)
 	return entry and entry.expandable == true
 end
 
+local eligibility_messages = {
+	workspace = "Only .csproj, .fsproj, or .vbproj project files can be added to the solution.",
+	solutionFolder = "Only projects or solution items can be added to a Solution Folder.",
+	project = "Only non-project files can be added to a project.",
+	projectFolder = "Only non-project files can be added to a project folder.",
+}
+
 function Selector:toggle()
 	if not self:is_active() then
 		return
@@ -394,7 +401,11 @@ function Selector:toggle()
 	end
 	if entry.kind ~= "file" or entry.availability ~= "available" or not entry.selectable then
 		return self.on_error(
-			rpc.problem("not_selectable", "The selected file is not eligible for Add Existing.")
+			rpc.problem(
+				"not_selectable",
+				eligibility_messages[self.target_kind]
+					or "The selected file cannot be added to this workspace node."
+			)
 		)
 	end
 	if self.marks[id] then
@@ -515,7 +526,7 @@ function Selector:confirm()
 		return self.on_error(
 			rpc.problem(
 				"empty_selection",
-				"Press a on an available file to mark it before confirming Add Existing."
+				"Press Space on an available file to mark it before confirming Add Existing."
 			)
 		)
 	end

@@ -6,7 +6,7 @@ local fixture = assert(vim.env.DWE_FIXTURE, "DWE_FIXTURE is required")
 local fixture_root = vim.fs.dirname(fixture)
 local explorer = require("dotnet-workspace-explorer")
 local view = require("dotnet-workspace-explorer.view")
-local notification, desired_create_kind, desired_name, confirmation_result
+local notification, desired_create_kind, desired_display_name, desired_name, confirmation_result
 
 local function assert_equal(expected, actual, message)
 	assert(vim.deep_equal(expected, actual), message)
@@ -39,7 +39,7 @@ local function select_matching(text)
 			and line:find(semantic_name, 1, true)
 		if line:find(text, 1, true) or semantic_match then
 			vim.api.nvim_win_set_cursor(view.win, { index, 0 })
-			return
+			return index
 		end
 	end
 	error("missing explorer row: " .. text .. "\n" .. vim.inspect(lines()))
@@ -63,8 +63,8 @@ local function local_mapping(lhs)
 	return false
 end
 
-local function new_kind(kind, name)
-	desired_create_kind, desired_name = kind, name
+local function new_kind(kind, name, display_name)
+	desired_create_kind, desired_name, desired_display_name = kind, name, display_name
 	explorer.new()
 end
 
@@ -77,7 +77,15 @@ vim.ui.select = function(items, options, callback)
 	if options.kind == "workspace-create-option" then
 		for _, item in ipairs(items) do
 			if item.kind == desired_create_kind then
+				if desired_display_name then
+					assert_equal(
+						desired_display_name,
+						item.displayName,
+						"New picker did not preserve the core option name"
+					)
+				end
 				desired_create_kind = nil
+				desired_display_name = nil
 				return callback(item)
 			end
 		end
@@ -102,6 +110,9 @@ explorer.setup({
 	git = { enable = true },
 	presentation = { devicons = false },
 	width = 37,
+	mappings = {
+		new = "n",
+	},
 })
 explorer._register_commands()
 explorer.open()
@@ -118,6 +129,7 @@ wait_for(function()
 	end
 	return false
 end, "ExpandAll did not hydrate dependency properties")
+assert(not lines()[1]:find("◌", 1, true), "ignored descendants decorated the solution")
 
 select_matching("S SemanticStudio")
 new_kind("solutionFolder", "Solution Items")
@@ -131,7 +143,7 @@ wait_for(function()
 end, "logical Solution Folder did not reconcile")
 
 select_matching("S SemanticStudio")
-new_kind("addExisting")
+new_kind("addExisting", nil, "Add Existing Projects")
 wait_for(function()
 	for _, line in ipairs(lines()) do
 		if line:find("existing", 1, true) then
@@ -140,6 +152,30 @@ wait_for(function()
 	end
 	return false
 end, "root Add Existing selector did not open")
+assert_equal(false, local_mapping("a"), "selector retained the semantic New key")
+assert(local_mapping("<Space>"), "selector did not install Space")
+local configured_new = local_mapping("n")
+assert(configured_new, "configured semantic New mapping disappeared")
+configured_new.callback()
+explorer.new()
+vim.cmd("DotnetWorkspaceExplorerNew")
+assert_equal(nil, notification, "semantic New reported an error while the selector was active")
+
+local ignored_row = select_matching("ignored")
+assert(
+	lines()[ignored_row]:find("◌", 1, true),
+	"the exact ignored selector directory was not decorated"
+)
+assert(not lines()[1]:find("◌", 1, true), "ignored state propagated to the selector root")
+
+select_matching("NOTES.md")
+local_mapping("<Space>").callback()
+assert_equal(
+	"Only .csproj, .fsproj, or .vbproj project files can be added to the solution.",
+	notification,
+	"root ineligible file did not explain project-only eligibility"
+)
+notification = nil
 select_matching("existing")
 explorer.activate()
 for _, project in ipairs({
@@ -166,7 +202,7 @@ for _, project in ipairs({
 		return false
 	end, "root project did not appear: " .. project.file)
 	select_matching(project.file)
-	explorer.new()
+	local_mapping("<Space>").callback()
 end
 explorer.activate()
 wait_for(function()
@@ -193,7 +229,7 @@ wait_for(function()
 	return false
 end, "solution-folder Add Existing selector did not open")
 select_matching("NOTES.md")
-explorer.new()
+local_mapping("<Space>").callback()
 confirmation_result = 2
 explorer.activate()
 assert(not semantic_root(lines()[1]), "cancelled Add Existing confirmation left the selector")
@@ -223,7 +259,7 @@ wait_for(function()
 	return false
 end, "project Add Existing selector did not open")
 select_matching("Loose.fs")
-explorer.new()
+local_mapping("<Space>").callback()
 explorer.activate()
 wait_for(function()
 	local current = lines()
@@ -263,7 +299,7 @@ wait_for(function()
 	return false
 end, "nested project item did not appear")
 select_matching("LooseNested.fs")
-explorer.new()
+local_mapping("<Space>").callback()
 explorer.activate()
 wait_for(function()
 	local current = lines()
@@ -282,7 +318,7 @@ select_matching("P Studio.FSharp")
 vim.api.nvim_win_set_width(view.win, 43)
 local before_cancel_lines = vim.deepcopy(lines())
 local before_cancel_maps = {}
-for _, lhs in ipairs({ "a", "<CR>", "q", "<Esc>" }) do
+for _, lhs in ipairs({ "a", "<Space>", "<CR>", "q", "<Esc>" }) do
 	before_cancel_maps[lhs] = local_mapping(lhs)
 end
 new_kind("addExisting")
@@ -301,7 +337,7 @@ end, "cancellation selector did not open")
 explorer.close()
 assert_equal(before_cancel_lines, lines(), "selector cancellation changed semantic rows")
 assert_equal(43, vim.api.nvim_win_get_width(view.win), "selector cancellation changed width")
-for _, lhs in ipairs({ "a", "<CR>", "q", "<Esc>" }) do
+for _, lhs in ipairs({ "a", "<Space>", "<CR>", "q", "<Esc>" }) do
 	assert_equal(before_cancel_maps[lhs], local_mapping(lhs), lhs .. " mapping did not restore")
 end
 

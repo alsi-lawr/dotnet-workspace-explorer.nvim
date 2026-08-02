@@ -15,6 +15,7 @@ mkdir -p \
 	"$fixture/existing/Root.CSharp" \
 	"$fixture/existing/Root.FSharp" \
 	"$fixture/existing/Root.VisualBasic" \
+	"$fixture/ignored" \
 	"$fixture/src/Studio.CSharp/Actions" \
 	"$fixture/src/Studio.CSharp/Models" \
 	"$fixture/src/Studio.FSharp/Foundation" \
@@ -171,6 +172,8 @@ printf 'namespace Studio.FSharp\\n\\nmodule Loose = let ready = true\\n' \
 	>"$fixture/src/Studio.FSharp/Loose.fs"
 printf 'namespace Studio.FSharp\\n\\nmodule LooseNested = let ready = true\\n' \
 	>"$fixture/src/Studio.FSharp/Foundation/LooseNested.fs"
+printf 'ignored/\n' >"$fixture/.gitignore"
+printf 'Ignored selector entry.\n' >"$fixture/ignored/Private.txt"
 
 git -C "$fixture" init --quiet
 git -C "$fixture" add .

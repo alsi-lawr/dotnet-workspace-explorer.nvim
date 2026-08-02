@@ -16,7 +16,7 @@ end
 local function scenario(identifier, action)
 	local ok, err = pcall(action)
 	if not ok then
-		error(("DWE-017/%s: %s"):format(identifier, err))
+		error(("DWE-019/%s: %s"):format(identifier, err))
 	end
 end
 
@@ -148,14 +148,23 @@ local function harness(options)
 		is_live = function()
 			return live
 		end,
-		on_enter = function()
+		on_enter = function(instance)
 			events[#events + 1] = "enter"
+			if options.on_enter then
+				options.on_enter(instance)
+			end
 		end,
-		on_render = function()
+		on_render = function(instance)
 			events[#events + 1] = "render"
+			if options.on_render then
+				options.on_render(instance)
+			end
 		end,
 		on_leave = function()
 			events[#events + 1] = "leave"
+			if options.on_leave then
+				options.on_leave()
+			end
 		end,
 		on_selected = function(instance)
 			instance:select(selected)
@@ -502,7 +511,7 @@ scenario(
 		state.selector:confirm()
 		assert_equal("empty_selection", state.errors[#state.errors].code, "empty confirm is local")
 		assert(
-			state.errors[#state.errors].message:find("Press a", 1, true),
+			state.errors[#state.errors].message:find("Press Space", 1, true),
 			"empty confirmation explains marking"
 		)
 		local calls = #state.calls
@@ -529,6 +538,36 @@ scenario(
 		assert_equal("selection_limit", state.errors[#state.errors].code, "limit error")
 	end
 )
+
+scenario("ineligible ordinary files explain the selected target rule", function()
+	local messages = {
+		workspace = "Only .csproj, .fsproj, or .vbproj project files can be added to the solution.",
+		solutionFolder = "Only projects or solution items can be added to a Solution Folder.",
+		project = "Only non-project files can be added to a project.",
+		projectFolder = "Only non-project files can be added to a project folder.",
+	}
+	for target_kind, message in pairs(messages) do
+		local state = harness({
+			target_kind = target_kind,
+			request = function(method, _, callback)
+				if method == "workspace/addExisting/start" then
+					callback(
+						nil,
+						start_page({
+							entry("blocked", "Blocked.txt", "file", false, false, "txt"),
+						})
+					)
+					return true
+				end
+			end,
+		})
+		state.start()
+		state.select("blocked")
+		state.selector:toggle()
+		assert_equal("not_selectable", state.errors[1].code, target_kind .. " error code")
+		assert_equal(message, state.errors[1].message, target_kind .. " target guidance")
+	end
+end)
 
 scenario("legacy selector entries retain the exact older response shape", function()
 	local state = harness({
@@ -734,9 +773,18 @@ scenario("same-drawer-mapping-and-semantic-view-restoration", function()
 			return function() end
 		end,
 	})
+	local semantic_new_calls = 0
+	semantic_actions.new = function()
+		semantic_new_calls = semantic_new_calls + 1
+	end
 	view.mappings(semantic_actions)
 	local plugin_owned = find_mapping("a").callback
 	local custom_callback = function() end
+	vim.api.nvim_buf_set_keymap(view.buf, "n", "<Space>", "j", {
+		noremap = true,
+		nowait = true,
+		silent = true,
+	})
 	vim.api.nvim_buf_set_keymap(view.buf, "n", "<CR>", "zz", {
 		noremap = false,
 		nowait = false,
@@ -751,7 +799,7 @@ scenario("same-drawer-mapping-and-semantic-view-restoration", function()
 	pcall(vim.keymap.del, "n", "<Esc>", { buffer = view.buf })
 
 	local before = {}
-	for _, lhs in ipairs({ "a", "<CR>", "q", "<Esc>", "z" }) do
+	for _, lhs in ipairs({ "a", "<Space>", "<CR>", "q", "<Esc>", "z" }) do
 		before[lhs] = mapping_signature(find_mapping(lhs)) or false
 	end
 	local selector = {
@@ -783,6 +831,7 @@ scenario("same-drawer-mapping-and-semantic-view-restoration", function()
 		children = { ["selector-root"] = { "selector-file" } },
 		expanded = { ["selector-root"] = true },
 		marks = {},
+		toggles = 0,
 	}
 	function selector:get_entry(id)
 		return self.entries[id]
@@ -796,23 +845,28 @@ scenario("same-drawer-mapping-and-semantic-view-restoration", function()
 	function selector:select(id)
 		self.selected_id = id
 	end
+	function selector:toggle()
+		self.toggles = self.toggles + 1
+	end
 	local actions = {
-		new = function() end,
 		activate = function() end,
 		close = function() end,
 	}
 	view.enter_selector(selector, actions, tree)
 	assert_equal(view.buf, vim.api.nvim_win_get_buf(view.win), "selector reuses the same drawer")
 	assert_equal(41, vim.api.nvim_win_get_width(view.win), "selector keeps user width")
-	for _, lhs in ipairs({ "a", "<CR>", "q", "<Esc>" }) do
-		local action = lhs == "a" and "new" or lhs == "<CR>" and "activate" or "close"
+	assert_equal(nil, find_mapping("a"), "semantic New key is absent in selector mode")
+	find_mapping("<Space>").callback()
+	assert_equal(1, selector.toggles, "Space calls the selector-private toggle")
+	for _, lhs in ipairs({ "<CR>", "q", "<Esc>" }) do
+		local action = lhs == "<CR>" and "activate" or "close"
 		assert(find_mapping(lhs).callback == actions[action])
 	end
 	assert_equal(before.z, mapping_signature(find_mapping("z")), "unrelated mapping stays untouched")
 
 	vim.api.nvim_win_set_width(view.win, 48)
 	view.leave_selector(tree)
-	for _, lhs in ipairs({ "a", "<CR>", "q", "<Esc>", "z" }) do
+	for _, lhs in ipairs({ "a", "<Space>", "<CR>", "q", "<Esc>", "z" }) do
 		assert_equal(
 			before[lhs],
 			mapping_signature(find_mapping(lhs)) or false,
@@ -820,11 +874,131 @@ scenario("same-drawer-mapping-and-semantic-view-restoration", function()
 		)
 	end
 	assert(find_mapping("a").callback == plugin_owned, "plugin-owned callback identity is restored")
+	find_mapping("a").callback()
+	assert_equal(1, semantic_new_calls, "restored semantic New mapping remains active")
 	assert_equal(41, vim.api.nvim_win_get_width(view.win), "semantic drawer restores user width")
 	assert_equal("semantic-15", tree.selected_id, "semantic ID selection is restored")
 	assert_equal("right", config.get().position, "dock side is unchanged")
 	view.close()
 end)
+
+scenario(
+	"success cancellation failure staleness invalidation and replacement restore every modal mapping",
+	function()
+		local mapping_keys = { "a", "<Space>", "<CR>", "q", "<Esc>" }
+		local function exercise(name, options, exit)
+			local tree = semantic_tree()
+			local semantic_actions = setmetatable({}, {
+				__index = function()
+					return function() end
+				end,
+			})
+			local modal_actions = {
+				activate = function() end,
+				close = function() end,
+			}
+			config.setup({
+				mappings = {
+					activate = false,
+					close = false,
+					new = "a",
+				},
+			})
+			view.open()
+			for _, lhs in ipairs(mapping_keys) do
+				pcall(vim.keymap.del, "n", lhs, { buffer = view.buf })
+			end
+			view.mappings(semantic_actions)
+			vim.api.nvim_buf_set_keymap(view.buf, "n", "<Space>", "j", {
+				noremap = true,
+				nowait = true,
+				silent = true,
+			})
+			vim.api.nvim_buf_set_keymap(view.buf, "n", "<CR>", "zz", {
+				noremap = false,
+				nowait = false,
+				silent = false,
+			})
+			vim.keymap.set("n", "q", function() end, {
+				buffer = view.buf,
+				desc = "custom cancellation",
+			})
+			vim.api.nvim_buf_set_keymap(view.buf, "n", "<Esc>", "<Nop>", {
+				noremap = true,
+				nowait = false,
+				silent = true,
+			})
+			view.render(tree)
+			local before = {}
+			for _, lhs in ipairs(mapping_keys) do
+				before[lhs] = mapping_signature(find_mapping(lhs)) or false
+			end
+			options = vim.tbl_extend("force", options or {}, {
+				on_enter = function(active)
+					view.enter_selector(active, modal_actions, tree)
+				end,
+				on_render = function(active)
+					view.render_selector(active)
+				end,
+				on_leave = function()
+					view.leave_selector(tree)
+				end,
+			})
+			local state = harness(options)
+			state.start()
+			assert_equal(nil, find_mapping("a"), name .. " removes semantic New")
+			assert(find_mapping("<Space>"), name .. " installs Space")
+			exit(state)
+			for _, lhs in ipairs(mapping_keys) do
+				assert_equal(
+					before[lhs],
+					mapping_signature(find_mapping(lhs)) or false,
+					name .. " restores " .. lhs
+				)
+			end
+			view.close()
+		end
+
+		exercise("success", nil, function(state)
+			local original_confirm = vim.fn.confirm
+			vim.fn.confirm = function()
+				return 1
+			end
+			state.selector:toggle()
+			state.selector:confirm()
+			vim.fn.confirm = original_confirm
+		end)
+		exercise("cancellation", nil, function(state)
+			state.selector:cancel()
+		end)
+		exercise("failure", {
+			request = function(method, parameters, callback)
+				if
+					method == "workspace/addExisting/children"
+					and parameters.parentEntryId == "directory-1"
+				then
+					callback({ code = "selector_failed", message = "failed" })
+					return true
+				end
+			end,
+		}, function(state)
+			state.select("directory-1")
+			state.selector:expand()
+		end)
+		exercise("staleness", nil, function(state)
+			state.selector:workspace_changed(8)
+		end)
+		exercise("invalidation", nil, function(state)
+			state.selector:invalidate(true)
+		end)
+		exercise("session replacement", nil, function(state)
+			state.start()
+			assert_equal(nil, find_mapping("a"), "replacement keeps semantic New removed")
+			assert(find_mapping("<Space>"), "replacement keeps Space installed")
+			state.selector:cancel()
+		end)
+	end
+)
 
 scenario("selector-devicons-disabled-missing-and-available", function()
 	local selector = {
@@ -914,8 +1088,6 @@ scenario("selector-devicons-disabled-missing-and-available", function()
 
 	selector.marks.file = true
 	view.render_selector(selector)
-	lines = vim.api.nvim_buf_get_lines(view.buf, 0, -1, false)
-	assert(not lines[2]:find("[a]", 1, true), "marked file has no inline marker")
 	local namespace = vim.api.nvim_get_namespaces()["dotnet-workspace-explorer"]
 	local extmarks = vim.api.nvim_buf_get_extmarks(view.buf, namespace, 0, -1, { details = true })
 	local signs = {}
@@ -1019,9 +1191,13 @@ scenario("mode-aware-public-and-configured-action-routing", function()
 			collapse = "H",
 		},
 	})
+	public._register_commands()
 	public.open("target")
+	find_mapping("n").callback()
+	public.new()
+	vim.cmd("DotnetWorkspaceExplorerNew")
+	assert_equal({}, active_selector.calls, "configured and public New actions are inert")
 	for _, mapping in ipairs({
-		{ lhs = "n", action = "toggle" },
 		{ lhs = "o", action = "activate" },
 		{ lhs = "x", action = "cancel" },
 		{ lhs = "L", action = "expand" },
@@ -1036,6 +1212,8 @@ scenario("mode-aware-public-and-configured-action-routing", function()
 	end
 	assert_equal(nil, mutation_creates, "configured New never reaches semantic mutation in selector")
 	active_selector.engaged = false
+	find_mapping("n").callback()
+	assert_equal(1, mutation_creates, "configured semantic New works after selector exit")
 	public.close()
 
 	Workspace.new, Editing.new, Mutations.new, SelectorClass.new =
@@ -1043,4 +1221,4 @@ scenario("mode-aware-public-and-configured-action-routing", function()
 	package.loaded["dotnet-workspace-explorer"] = nil
 end)
 
-print("DWE-017 transient selector scenarios passed")
+print("DWE-019 transient selector scenarios passed")

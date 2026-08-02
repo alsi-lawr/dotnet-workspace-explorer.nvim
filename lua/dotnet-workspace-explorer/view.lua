@@ -36,7 +36,7 @@ local kinds = {
 	directory = { glyph = "folder", group = "Folder" },
 	file = { glyph = "file", group = "File" },
 }
-local selector_mappings = { "a", "<CR>", "q", "<Esc>" }
+local selector_mappings = { "a", "<Space>", "<CR>", "q", "<Esc>" }
 local function valid(kind, id)
 	return id and vim.api["nvim_" .. kind .. "_is_valid"](id)
 end
@@ -311,14 +311,19 @@ function M.enter_selector(selector, actions, tree)
 		snapshot.mappings[lhs] = local_mapping(lhs) or false
 	end
 	M.selector_snapshot = snapshot
+	for _, lhs in ipairs(selector_mappings) do
+		pcall(vim.keymap.del, "n", lhs, { buffer = M.buf })
+	end
 	local modal = {
-		a = actions.new,
+		["<Space>"] = function()
+			selector:toggle()
+		end,
 		["<CR>"] = actions.activate,
 		q = actions.close,
 		["<Esc>"] = actions.close,
 	}
-	for _, lhs in ipairs(selector_mappings) do
-		vim.keymap.set("n", lhs, modal[lhs], {
+	for lhs, callback in pairs(modal) do
+		vim.keymap.set("n", lhs, callback, {
 			buffer = M.buf,
 			desc = "Workspace explorer: Add Existing",
 			nowait = true,

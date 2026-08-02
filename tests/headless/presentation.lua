@@ -207,20 +207,54 @@ assert(
 	"ordered Git glyphs sit between project icon and name"
 )
 assert(
-	lines[6]:find(" ✓✗➜ Multi\tName.fs [m]", 1, true),
+	lines[6]:find(" ✓✗➜ Multi\tName.fs", 1, true),
 	"ordered Git glyphs precede the authoritative file name"
 )
-local mark_highlight, staged_highlight, ignored_highlight
+assert(not lines[6]:find("[m]", 1, true), "move marks do not modify line text")
+assert(not lines[6]:find("[c]", 1, true), "copy marks do not modify line text")
+local signs = {}
+for _, extmark in ipairs(vim.api.nvim_buf_get_extmarks(view.buf, -1, 0, -1, { details = true })) do
+	if extmark[4].sign_text then
+		signs[#signs + 1] = {
+			row = extmark[2],
+			text = vim.trim(extmark[4].sign_text),
+			group = extmark[4].sign_hl_group,
+		}
+	end
+end
+assert_equal(
+	{ { row = 5, text = "󰆤", group = "DotnetWorkspaceExplorerMark" } },
+	signs,
+	"move mark renders as the nvim-tree target in the sign column"
+)
+tree.mark_mode = "copy"
+view.render(tree)
+local copy_signs = {}
+for _, extmark in ipairs(vim.api.nvim_buf_get_extmarks(view.buf, -1, 0, -1, { details = true })) do
+	if extmark[4].sign_text then
+		copy_signs[#copy_signs + 1] = {
+			row = extmark[2],
+			text = vim.trim(extmark[4].sign_text),
+			group = extmark[4].sign_hl_group,
+		}
+	end
+end
+assert_equal(signs, copy_signs, "copy mark uses the same sign-column target")
+
+local staged_highlight, ignored_highlight
 for _, item in ipairs(highlights) do
-	if item[1] == "DotnetWorkspaceExplorerMark" then
-		mark_highlight = item
-	elseif item[1] == "DotnetWorkspaceExplorerGitStaged" then
+	if item[1] == "DotnetWorkspaceExplorerGitStaged" then
 		staged_highlight = item
 	elseif item[1] == "DotnetWorkspaceExplorerGitIgnored" then
 		ignored_highlight = item
 	end
 end
-assert(mark_highlight and staged_highlight and ignored_highlight, "mark and Git glyph highlights")
+assert(staged_highlight and ignored_highlight, "Git glyph highlights")
+assert_equal(
+	"Special",
+	vim.api.nvim_get_hl(0, { name = "DotnetWorkspaceExplorerMark", link = true }).link,
+	"mark sign follows the theme"
+)
 assert_equal(
 	"DiffAdd",
 	vim.api.nvim_get_hl(0, { name = "DotnetWorkspaceExplorerGitStaged", link = true }).link,
@@ -232,6 +266,10 @@ assert_equal(
 	"ignored glyph follows theme"
 )
 tree.mark_mode, tree.marks, tree.decorations = nil, {}, {}
+view.render(tree)
+for _, extmark in ipairs(vim.api.nvim_buf_get_extmarks(view.buf, -1, 0, -1, { details = true })) do
+	assert_equal(nil, extmark[4].sign_text, "cleared marks leave no stale sign")
+end
 
 local icon_range
 for _, item in ipairs(highlights) do

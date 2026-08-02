@@ -508,19 +508,20 @@ function M.render(tree, restoration)
 		local line = prefix .. name
 		highlights[#highlights + 1] =
 			span("DotnetWorkspaceExplorer" .. kind.group, name_start, name_start + #name)
-		if tree.marks and tree.marks[id] then
-			local suffix = tree.mark_mode == "move" and " [m]" or " [c]"
-			local mark_start = #line
-			line = line .. suffix
-			highlights[#highlights + 1] =
-				span("DotnetWorkspaceExplorerMark", mark_start, mark_start + #suffix)
-		end
+		local sign = tree.marks
+				and tree.marks[id]
+				and {
+					text = "󰆤",
+					group = "DotnetWorkspaceExplorerMark",
+				}
+			or nil
 		lines[#lines + 1] = line
 		rows[#rows + 1] = {
 			id = id,
 			depth = depth,
 			ancestors = parents,
 			highlights = highlights,
+			sign = sign,
 		}
 		by_id[id] = #rows
 		if tree.expanded[id] then

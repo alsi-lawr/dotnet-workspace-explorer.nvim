@@ -1,4 +1,5 @@
 local rpc = require("dotnet-workspace-explorer.rpc")
+local workspace_delta = require("dotnet-workspace-explorer.workspace_delta")
 
 local M = {}
 local Workspace = {}
@@ -12,6 +13,10 @@ end
 local function is_absolute(path)
 	local absolute = vim.fs.abspath(path)
 	return absolute == path or vim.fs.normalize(absolute) == vim.fs.normalize(path)
+end
+
+local function valid_revision(value)
+	return type(value) == "number" and value % 1 == 0 and value >= 0
 end
 
 local function valid_file_resolution(result, id, revision)
@@ -325,6 +330,7 @@ function Workspace:_reconcile(callback, retry)
 			self.nodes, self.children, self.roots, self.expanded =
 				restored.nodes, restored.children, restored.roots, restored.expanded
 			self.revision, self.selected_id = restored.revision, restored.selected_id
+			self.reflected_base_revision = nil
 			self.phase = "ready"
 			self.on_change(self)
 			self:_finish_reconcile()
@@ -333,6 +339,7 @@ function Workspace:_reconcile(callback, retry)
 end
 
 function Workspace:_invalidate()
+	self.reflected_base_revision = nil
 	self.epoch, self.reconcile_queued = self.epoch + 1, true
 	if not self.reconciling and not self.reconciliation_deferred then
 		self:_reconcile()
@@ -340,7 +347,16 @@ function Workspace:_invalidate()
 end
 
 function Workspace:_notification(method, parameters)
-	if method == "workspace/delta" or method == "workspace/reset" then
+	if method == "workspace/delta" then
+		if self.reconciliation_deferred then
+			self.deferred_reconciliation = true
+			self.on_notification(method, parameters)
+		elseif workspace_delta.apply(self, parameters, normalize_node) then
+			self.on_change(self)
+		else
+			self:_invalidate()
+		end
+	elseif method == "workspace/reset" then
 		if self.reconciliation_deferred then
 			self.deferred_reconciliation = true
 			self.on_notification(method, parameters)
@@ -451,7 +467,8 @@ function Workspace:expand(id, callback, retried)
 	end
 	local captured_generation, captured_epoch = self.client.generation, self.epoch
 	local captured_workspace, expected_revision = self.workspace_id, self.revision
-	local collected, token, seen_tokens = {}, nil, {}
+	local collected, token, seen_tokens, response_revision = {}, nil, {}, nil
+	local awaiting_delta = false
 	local function page()
 		local parameters = { parentNodeId = id, pageSize = self.client.limits.maxPageSize }
 		if token then
@@ -484,7 +501,9 @@ function Workspace:expand(id, callback, retried)
 			end
 			if
 				type(result) ~= "table"
-				or result.revision ~= expected_revision
+				or not valid_revision(result.revision)
+				or result.revision < expected_revision
+				or response_revision and result.revision ~= response_revision
 				or result.parentNodeId ~= id
 				or type(result.nodes) ~= "table"
 				or not vim.islist(result.nodes)
@@ -495,6 +514,12 @@ function Workspace:expand(id, callback, retried)
 				end
 				restore_expansion()
 				return finish(stale())
+			end
+			response_revision = response_revision or result.revision
+			if response_revision > self.revision then
+				self.reflected_base_revision = self.revision
+				self.revision = response_revision
+				awaiting_delta = true
 			end
 			for _, child in ipairs(result.nodes) do
 				collected[#collected + 1] = child
@@ -510,7 +535,7 @@ function Workspace:expand(id, callback, retried)
 				seen_tokens[token] = true
 				return page()
 			end
-			local nodes, ids = self:_normalize_nodes(collected, id, expected_revision, self.nodes)
+			local nodes, ids = self:_normalize_nodes(collected, id, response_revision, self.nodes)
 			if not nodes then
 				local reason = rpc.problem("invalid_tree", "The workspace children response is invalid.")
 				restore_expansion()
@@ -521,7 +546,9 @@ function Workspace:expand(id, callback, retried)
 				self.nodes[node.id] = node
 			end
 			self.children[id] = ids
-			self.on_change(self)
+			if not awaiting_delta then
+				self.on_change(self)
+			end
 			finish(nil, ids)
 		end)
 	end

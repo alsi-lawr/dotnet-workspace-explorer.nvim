@@ -77,16 +77,26 @@ function FakeClient:request(method, parameters, callback)
 	end
 	if self.revision == 0 then
 		self.revision = 1
-		self.options.on_notification("workspace/delta", {
+		callback(nil, {
+			revision = self.revision,
+			parentNodeId = "project",
+			nodes = {
+				node("file", "projectFile", "Program.fs", self.revision),
+			},
+		})
+		return self.options.on_notification("workspace/delta", {
 			workspaceId = "workspace-id",
 			baseRevision = 0,
 			newRevision = 1,
-			changes = {},
+			changes = {
+				{
+					kind = "update",
+					parentNodeId = "workspace",
+					index = 0,
+					node = node("project", "project", "Example.fsproj", 1, "hydrated"),
+				},
+			},
 			diagnostics = {},
-		})
-		return callback({
-			code = "workspace_conflict",
-			message = "The workspace revision changed.",
 		})
 	end
 	local files = {
@@ -204,6 +214,122 @@ assert_equal(true, tree.expanded.workspace, "workspace remains expanded after re
 assert_equal(true, tree.expanded.project, "project remains expanded after reset")
 assert_equal({}, errors, "reset reconciliation stays silent")
 assert_equal(nil, client.termination, "valid reconciliation keeps the session live")
+
+do
+	tree:select("project")
+	local before_deltas = #changes
+	local function notify(base_revision, new_revision, delta_changes)
+		client.options.on_notification("workspace/delta", {
+			workspaceId = "workspace-id",
+			baseRevision = base_revision,
+			newRevision = new_revision,
+			changes = delta_changes,
+			diagnostics = {},
+		})
+	end
+
+	notify(2, 3, {
+		{
+			kind = "add",
+			parentNodeId = "workspace",
+			index = 1,
+			node = node("second-project", "project", "Second.fsproj", 3),
+		},
+	})
+	notify(3, 4, {
+		{
+			kind = "update",
+			parentNodeId = "workspace",
+			index = 0,
+			node = node("project", "project", "Renamed.fsproj", 4),
+		},
+	})
+	notify(4, 5, {
+		{
+			kind = "move",
+			id = "second-file",
+			oldParentId = "project",
+			oldIndex = 1,
+			newParentId = "project",
+			newIndex = 0,
+		},
+	})
+	notify(5, 6, {
+		{
+			kind = "replace",
+			oldId = "project",
+			parentNodeId = "workspace",
+			index = 0,
+			node = node("replacement-project", "project", "Replacement.fsproj", 6),
+		},
+	})
+	notify(6, 7, {
+		{
+			kind = "remove",
+			id = "second-project",
+			parentNodeId = "workspace",
+			index = 1,
+		},
+	})
+
+	assert_equal(before_deltas + 5, #changes, "compatible deltas render without reconciliation")
+	assert_equal(7, tree.revision, "compatible deltas advance the workspace revision")
+	assert_equal(
+		{ "replacement-project" },
+		tree.children.workspace,
+		"add, update, replace, and remove preserve root ordering"
+	)
+	assert_equal(
+		{ "second-file", "file" },
+		tree.children["replacement-project"],
+		"move and replace preserve hydrated children"
+	)
+	assert_equal(
+		"replacement-project",
+		tree.nodes["second-file"].parent_id,
+		"replacement reparents hydrated children"
+	)
+	assert_equal(true, tree.expanded["replacement-project"], "replacement preserves expansion")
+	assert_equal("replacement-project", tree.selected_id, "replacement preserves selection")
+	assert_equal(nil, tree.nodes.project, "replacement removes the old identity")
+end
+
+do
+	local delta = require("dotnet-workspace-explorer.workspace_delta")
+	local state = {
+		workspace_id = "workspace-id",
+		revision = 1,
+		nodes = {
+			parent = { id = "parent", parent_id = nil, revision = 1 },
+			child = { id = "child", parent_id = "parent", revision = 1 },
+		},
+		children = { parent = { "child" } },
+		roots = { "parent" },
+		expanded = { parent = true },
+		selected_id = "child",
+	}
+	local applied = delta.apply(state, {
+		workspaceId = "workspace-id",
+		baseRevision = 1,
+		newRevision = 2,
+		changes = {
+			{
+				kind = "move",
+				id = "child",
+				oldParentId = "parent",
+				oldIndex = 1,
+				newParentId = "parent",
+				newIndex = 0,
+			},
+		},
+		diagnostics = {},
+	}, function()
+		error("move normalization was not expected")
+	end)
+	assert_equal(false, applied, "an inconsistent move index requires reconciliation")
+	assert_equal({ "child" }, state.children.parent, "a rejected delta leaves state unchanged")
+	assert_equal(1, state.revision, "a rejected delta leaves the revision unchanged")
+end
 
 do
 	local invalidations, notifications = 0, {}

@@ -122,8 +122,7 @@ Actions are also available as commands, so every mapping can be changed or remov
 
 ## Status
 
-The plugin is experimental and has no tagged release yet. Commands and configuration may change
-before the first release.
+The plugin is experimental. Commands and configuration may change before a stable release.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development, testing, and showcase capture instructions.
 

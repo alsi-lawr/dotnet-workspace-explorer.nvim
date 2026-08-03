@@ -40,7 +40,7 @@ assembly versions, and Git state across C#, F#, and Visual Basic.
 ## Requirements
 
 - Neovim 0.12 or newer
-- [`dotnet-we`](https://github.com/alsi-lawr/dotnet-workspace-explorer)
+- [`dotnet-we` 0.2.0 or newer](https://github.com/alsi-lawr/dotnet-workspace-explorer)
 - [`nvim-web-devicons`](https://github.com/nvim-tree/nvim-web-devicons), if you want file icons
 
 ## Install

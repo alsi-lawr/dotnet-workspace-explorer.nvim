@@ -9,28 +9,10 @@ local function integer(value)
 	return type(value) == "number" and value >= 0 and value % 1 == 0
 end
 
-local function exact_map(value, keys)
-	if type(value) ~= "table" or vim.islist(value) then
-		return false
-	end
-	local count = 0
-	for key in pairs(value) do
-		if not keys[key] then
-			return false
-		end
-		count = count + 1
-	end
-	return count == vim.tbl_count(keys)
-end
-
 local function snapshot(result, version_two)
 	if
-		not exact_map(result, {
-			available = true,
-			workspaceRevision = true,
-			statusRevision = true,
-			decorations = true,
-		})
+		type(result) ~= "table"
+		or vim.islist(result)
 		or type(result.available) ~= "boolean"
 		or not integer(result.workspaceRevision)
 		or not integer(result.statusRevision)
@@ -41,12 +23,17 @@ local function snapshot(result, version_two)
 	end
 	local decorations, seen = {}, {}
 	for _, decoration in ipairs(result.decorations) do
-		local keys = version_two and { nodeId = true, states = true } or { nodeId = true, state = true }
-		local states = version_two and git_states.normalize(decoration.states, false)
-			or git_states.legacy(decoration.state)
+		if type(decoration) ~= "table" or vim.islist(decoration) then
+			return nil
+		end
+		local states
+		if version_two then
+			states = git_states.normalize(decoration.states, false)
+		else
+			states = git_states.legacy(decoration.state)
+		end
 		if
-			not exact_map(decoration, keys)
-			or type(decoration.nodeId) ~= "string"
+			type(decoration.nodeId) ~= "string"
 			or decoration.nodeId == ""
 			or not states
 			or seen[decoration.nodeId]

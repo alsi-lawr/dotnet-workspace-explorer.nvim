@@ -12,23 +12,6 @@ local function map(value)
 	return type(value) == "table" and not vim.islist(value)
 end
 
-local function exact_keys(value, allowed)
-	if not map(value) then
-		return false
-	end
-	for key in pairs(value) do
-		if allowed[key] == nil then
-			return false
-		end
-	end
-	for key, required in pairs(allowed) do
-		if required and value[key] == nil then
-			return false
-		end
-	end
-	return true
-end
-
 local function nonempty(value)
 	return type(value) == "string" and value ~= ""
 end
@@ -39,25 +22,41 @@ local availability_values = {
 	ineligible = true,
 }
 
+local git_state_values = {}
+for _, state in ipairs(git_states.presentation) do
+	git_state_values[state.name] = true
+end
+
+local function normalize_git_states(value)
+	if type(value) ~= "table" or not vim.islist(value) then
+		return nil
+	end
+	local present = {}
+	for _, state in ipairs(value) do
+		if type(state) ~= "string" then
+			return nil
+		end
+		if git_state_values[state] then
+			present[state] = true
+		end
+	end
+	local normalized = {}
+	for _, state in ipairs(git_states.presentation) do
+		if present[state.name] then
+			normalized[#normalized + 1] = state.name
+		end
+	end
+	return normalized
+end
+
 local function normalize_entry(
 	value,
 	parent_id,
 	presentation_version_two,
 	directory_selection_version_one
 )
-	local keys = {
-		entryId = true,
-		displayName = true,
-		kind = true,
-		expandable = true,
-		selectable = true,
-		iconHint = false,
-	}
-	if presentation_version_two then
-		keys.availability, keys.gitStates = true, true
-	end
 	if
-		not exact_keys(value, keys)
+		not map(value)
 		or not nonempty(value.entryId)
 		or not nonempty(value.displayName)
 		or (value.kind ~= "directory" and value.kind ~= "file")
@@ -72,7 +71,7 @@ local function normalize_entry(
 	local availability = value.selectable and "available" or "ineligible"
 	local states = {}
 	if presentation_version_two then
-		states = git_states.normalize(value.gitStates, true)
+		states = normalize_git_states(value.gitStates)
 		if
 			not states
 			or not availability_values[value.availability]
@@ -102,17 +101,7 @@ local function valid_next_token(value)
 end
 
 local function valid_start(result, revision, page_size)
-	if
-		not exact_keys(result, {
-			revision = true,
-			selectorId = true,
-			expiresAtUtc = true,
-			maxSelectionCount = true,
-			root = true,
-			entries = true,
-			nextToken = false,
-		})
-	then
+	if not map(result) then
 		return false
 	end
 	return result.revision == revision
@@ -126,15 +115,7 @@ local function valid_start(result, revision, page_size)
 end
 
 local function valid_page(result, selector_id, parent_id, revision, page_size)
-	if
-		not exact_keys(result, {
-			revision = true,
-			selectorId = true,
-			parentEntryId = true,
-			entries = true,
-			nextToken = false,
-		})
-	then
+	if not map(result) then
 		return false
 	end
 	return result.revision == revision
@@ -234,7 +215,7 @@ function Selector:_close(selector_id, captured)
 			if err then
 				return
 			end
-			if not exact_keys(result, { closed = true }) or result.closed ~= true then
+			if not map(result) or result.closed ~= true then
 				self.on_error(incompatible("The selector close response is incompatible."))
 			end
 		end
@@ -366,7 +347,7 @@ function Selector:start(options)
 			return self:_fail(incompatible("The selector root is incompatible."))
 		end
 		self.selector_id, self.root_id = result.selectorId, root.id
-		self.expires_at_utc, self.max_selection_count = result.expiresAtUtc, 256
+		self.max_selection_count = 256
 		self.entries[root.id] = root
 		local ids = { [root.id] = true }
 		local collected = add_entries(

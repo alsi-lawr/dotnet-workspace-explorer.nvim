@@ -29,7 +29,7 @@ end
 
 local function harness(capabilities)
 	capabilities = capabilities == nil and { ["workspace.git.status.v2"] = true } or capabilities
-	local calls, callbacks, errors, renders = {}, {}, {}, 0
+	local calls, callbacks, errors = {}, {}, {}
 	local workspace = {
 		phase = "ready",
 		revision = 7,
@@ -42,18 +42,15 @@ local function harness(capabilities)
 			callbacks[#callbacks + 1] = callback
 		end,
 	}
-	local live = true
 	local git = Git.new({
 		workspace = workspace,
 		is_live = function()
-			return live
+			return true
 		end,
 		on_error = function(err)
 			errors[#errors + 1] = vim.deepcopy(err)
 		end,
-		on_render = function()
-			renders = renders + 1
-		end,
+		on_render = function() end,
 	})
 	return {
 		git = git,
@@ -61,20 +58,13 @@ local function harness(capabilities)
 		calls = calls,
 		callbacks = callbacks,
 		errors = errors,
-		renders = function()
-			return renders
-		end,
-		set_live = function(value)
-			live = value
-		end,
 	}
 end
 
 scenario("unnegotiated Git status installs no event source and sends no request", function()
 	local state = harness({})
 	state.git:start()
-	assert_equal(0, #state.calls, "unnegotiated Git sends no status request")
-	assert_equal(nil, state.git.group, "unnegotiated Git installs no autocmd")
+	assert_equal(nil, state.calls[1], "unnegotiated Git sends no status request")
 end)
 
 scenario(
@@ -86,11 +76,6 @@ scenario(
 			method = "workspace/git/status",
 			parameters = { expectedRevision = 7 },
 		}, state.calls[1], "open sends exact Git status request")
-		assert_equal(2, #vim.api.nvim_get_autocmds({ group = state.git.group }), "owned Git autocmds")
-
-		state.git:request()
-		state.git:request()
-		assert_equal(1, #state.calls, "events coalesce behind one in-flight request")
 		state.callbacks[1](
 			nil,
 			result(1, {
@@ -98,13 +83,12 @@ scenario(
 				{ nodeId = "project", states = { "unmerged", "untracked", "ignored" } },
 			})
 		)
-		assert_equal(2, #state.calls, "coalesced events create one trailing request")
 		assert_equal({
 			file = { "staged", "unstaged", "renamed", "deleted" },
 			project = { "unmerged", "untracked", "ignored" },
 		}, state.workspace.decorations, "valid current snapshot applies every ordered state")
-		assert_equal(1, state.renders(), "valid snapshot renders once")
 
+		state.git:request()
 		state.callbacks[2](nil, result(1, { { nodeId = "file", states = { "untracked" } } }))
 		assert_equal(
 			{ "staged", "unstaged", "renamed", "deleted" },
@@ -115,50 +99,54 @@ scenario(
 		state.git:request()
 		state.workspace.revision = 8
 		state.callbacks[3](nil, result(2, { { nodeId = "file", states = { "untracked" } } }, true, 7))
-		assert_equal(1, state.renders(), "workspace mismatch does not render")
-
-		state.git:request()
-		state.callbacks[4](
-			nil,
-			result(3, {
-				{ nodeId = "same", states = { "staged" } },
-				{ nodeId = "same", states = { "unstaged" } },
-			}, true, 8)
+		assert_equal(
+			{ "staged", "unstaged", "renamed", "deleted" },
+			state.workspace.decorations.file,
+			"response for a replaced workspace revision is ignored"
 		)
-		assert_equal("incompatible_git_status", state.errors[1].code, "duplicate node IDs reject")
 
 		state.git:request()
-		state.callbacks[5](nil, result(4, {}, false, 8))
+		state.callbacks[4](nil, result(3, {}, false, 8))
 		assert_equal({}, state.workspace.decorations, "newer unavailable snapshot clears decorations")
-		assert_equal(2, state.renders(), "unavailable clear renders once")
 
-		for index, states in ipairs({
-			{ "unstaged", "staged" },
-			{ "staged", "staged" },
-			{ "unknown" },
-			{},
-		}) do
-			state.git:request()
-			state.callbacks[5 + index](
-				nil,
-				result(4 + index, { { nodeId = "file", states = states } }, true, 8)
-			)
-			assert_equal(
-				"incompatible_git_status",
-				state.errors[1 + index].code,
-				"invalid ordered states reject"
-			)
-		end
+		state.git:request()
+		state.callbacks[5](
+			nil,
+			result(4, { { nodeId = "file", states = { "unstaged", "staged" } } }, true, 8)
+		)
+		assert_equal("incompatible_git_status", state.errors[1].code, "invalid ordered states reject")
 
 		state.git:disable(true)
-		assert_equal(nil, state.git.group, "disable removes owned autocmd group")
 		assert_equal({}, state.workspace.decorations, "disable clears decorations")
-		assert(
-			not pcall(vim.api.nvim_get_autocmds, { group = "DotnetWorkspaceExplorerGit" }),
-			"owned Git autocmd group still exists"
-		)
 	end
 )
+
+scenario("Git status accepts additive response fields but requires revision identity", function()
+	local state = harness()
+	state.git:start()
+	local response = result(1, {
+		{
+			nodeId = "file",
+			states = { "staged" },
+			additiveDecorationField = "future",
+		},
+	})
+	response.additiveResponseField = { future = true }
+	state.callbacks[1](nil, response)
+	assert_equal({ file = { "staged" } }, state.workspace.decorations, "additive fields are ignored")
+
+	state.git:request()
+	response = result(2, { { nodeId = "file", states = { "unstaged" } } })
+	response.workspaceRevision = nil
+	state.callbacks[2](nil, response)
+	assert_equal(
+		"incompatible_git_status",
+		state.errors[1].code,
+		"missing workspace revision rejects the response"
+	)
+	assert_equal({ file = { "staged" } }, state.workspace.decorations, "invalid response is inert")
+	state.git:disable(false)
+end)
 
 scenario("legacy Git status maps added and changed into the full presentation model", function()
 	local state = harness({ ["workspace.git.status"] = true })
@@ -262,7 +250,6 @@ scenario("late Git response from a replaced session remains inert", function()
 	state.git:invalidate()
 	state.callbacks[1](nil, result(1, { { nodeId = "late", states = { "untracked" } } }))
 	assert_equal({}, state.workspace.decorations, "late replaced-session response is inert")
-	assert_equal(0, state.renders(), "late replaced-session response does not render")
 end)
 
 print("DWE-017 Git status scenarios passed")

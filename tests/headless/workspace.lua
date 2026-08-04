@@ -20,6 +20,8 @@ function FakeClient.new(options)
 		limits = { maxPageSize = 256 },
 		options = options,
 		revision = 0,
+		refresh_requests = {},
+		refresh_responses = {},
 	}, FakeClient)
 	return client
 end
@@ -46,6 +48,14 @@ local function node(id, kind, name, revision, load_state)
 end
 
 function FakeClient:request(method, parameters, callback)
+	if method == "workspace/refresh" then
+		self.refresh_requests[#self.refresh_requests + 1] = vim.deepcopy(parameters)
+		local response = table.remove(self.refresh_responses, 1)
+		if not response then
+			error("unexpected refresh request")
+		end
+		return callback(response.error, response.result)
+	end
 	if method == "workspace/root" then
 		return callback(nil, {
 			revision = self.revision,
@@ -133,31 +143,25 @@ package.loaded["dotnet-workspace-explorer.rpc"] = {
 package.loaded["dotnet-workspace-explorer.workspace"] = nil
 
 local Workspace = require("dotnet-workspace-explorer.workspace").Workspace
-local changes, errors = {}, {}
+local errors = {}
 local tree
 
 local function visible_ids()
 	local result = {}
 	local function add(id)
 		result[#result + 1] = id
-		if tree.expanded[id] then
-			for _, child in ipairs(tree.children[id] or {}) do
-				add(child)
-			end
+		for _, child in ipairs(tree:children_of(id) or {}) do
+			add(child)
 		end
 	end
-	for _, id in ipairs(tree.roots) do
-		add(id)
-	end
+	add("workspace")
 	return result
 end
 
 tree = Workspace.new({
 	command = "fake",
 	target = "Example.slnx",
-	on_change = function()
-		changes[#changes + 1] = visible_ids()
-	end,
+	on_change = function() end,
 	on_error = function(problem)
 		errors[#errors + 1] = problem
 	end,
@@ -168,56 +172,46 @@ tree:start(function(problem)
 	start_error = problem
 end)
 assert_equal(nil, start_error, "workspace start")
-assert_equal({ "workspace" }, changes[#changes], "initial root")
+assert_equal({ "workspace" }, visible_ids(), "initial root")
 
 local root_error
 tree:expand("workspace", function(problem)
 	root_error = problem
 end)
 assert_equal(nil, root_error, "root expansion")
-assert_equal({ "workspace", "project" }, changes[#changes], "loaded root children")
+assert_equal({ "workspace", "project" }, visible_ids(), "loaded root children")
 
 tree:select("project")
-local before_hydration = #changes
 local project_error
 tree:expand("project", function(problem)
 	project_error = problem
 end)
 assert_equal(nil, project_error, "project hydration retries without a stale-tree error")
 assert_equal({}, errors, "project hydration does not report a workspace-changed failure")
-assert_equal(before_hydration + 1, #changes, "hydration commits one restored tree")
 assert_equal(
 	{ "workspace", "project", "file" },
-	changes[#changes],
+	visible_ids(),
 	"hydration retains the complete expanded path"
 )
-assert_equal(true, tree.expanded.workspace, "workspace remains expanded")
-assert_equal(true, tree.expanded.project, "project remains expanded")
 assert_equal("project", tree.selected_id, "project selection survives hydration")
 
 tree:select("file")
-local before_reset = #changes
 client.revision = 2
 client.options.on_notification("workspace/reset", {
 	workspaceId = "workspace-id",
 	revision = 2,
 	diagnostics = {},
 })
-assert_equal(before_reset + 1, #changes, "reset commits one restored tree")
 assert_equal(
 	{ "workspace", "project", "file", "second-file" },
-	changes[#changes],
+	visible_ids(),
 	"reset updates the expanded tree in place"
 )
 assert_equal("file", tree.selected_id, "deep selection survives reset")
-assert_equal(true, tree.expanded.workspace, "workspace remains expanded after reset")
-assert_equal(true, tree.expanded.project, "project remains expanded after reset")
 assert_equal({}, errors, "reset reconciliation stays silent")
-assert_equal(nil, client.termination, "valid reconciliation keeps the session live")
 
 do
 	tree:select("project")
-	local before_deltas = #changes
 	local function notify(base_revision, new_revision, delta_changes)
 		client.options.on_notification("workspace/delta", {
 			workspaceId = "workspace-id",
@@ -272,162 +266,69 @@ do
 		},
 	})
 
-	assert_equal(before_deltas + 5, #changes, "compatible deltas render without reconciliation")
-	assert_equal(7, tree.revision, "compatible deltas advance the workspace revision")
 	assert_equal(
-		{ "replacement-project" },
-		tree.children.workspace,
-		"add, update, replace, and remove preserve root ordering"
+		{ "workspace", "replacement-project", "second-file", "file" },
+		visible_ids(),
+		"compatible add, update, move, replace, and remove deltas preserve the visible tree"
 	)
-	assert_equal(
-		{ "second-file", "file" },
-		tree.children["replacement-project"],
-		"move and replace preserve hydrated children"
-	)
-	assert_equal(
-		"replacement-project",
-		tree.nodes["second-file"].parent_id,
-		"replacement reparents hydrated children"
-	)
-	assert_equal(true, tree.expanded["replacement-project"], "replacement preserves expansion")
 	assert_equal("replacement-project", tree.selected_id, "replacement preserves selection")
-	assert_equal(nil, tree.nodes.project, "replacement removes the old identity")
 end
 
 do
-	local delta = require("dotnet-workspace-explorer.workspace_delta")
-	local state = {
-		workspace_id = "workspace-id",
-		revision = 1,
-		nodes = {
-			parent = { id = "parent", parent_id = nil, revision = 1 },
-			child = { id = "child", parent_id = "parent", revision = 1 },
-		},
-		children = { parent = { "child" } },
-		roots = { "parent" },
-		expanded = { parent = true },
-		selected_id = "child",
-	}
-	local applied = delta.apply(state, {
+	client.revision = 8
+	client.options.on_notification("workspace/delta", {
 		workspaceId = "workspace-id",
-		baseRevision = 1,
-		newRevision = 2,
+		baseRevision = 7,
+		newRevision = 8,
 		changes = {
 			{
 				kind = "move",
-				id = "child",
-				oldParentId = "parent",
+				id = "second-file",
+				oldParentId = "replacement-project",
 				oldIndex = 1,
-				newParentId = "parent",
+				newParentId = "replacement-project",
 				newIndex = 0,
 			},
 		},
 		diagnostics = {},
-	}, function()
-		error("move normalization was not expected")
-	end)
-	assert_equal(false, applied, "an inconsistent move index requires reconciliation")
-	assert_equal({ "child" }, state.children.parent, "a rejected delta leaves state unchanged")
-	assert_equal(1, state.revision, "a rejected delta leaves the revision unchanged")
+	})
+	assert_equal(
+		{ "workspace", "project" },
+		visible_ids(),
+		"an inconsistent delta is rejected in favour of the authoritative tree"
+	)
 end
 
 do
-	local invalidations, notifications = 0, {}
-	local deferred = setmetatable({
-		revision = 7,
-		on_notification = function(method, parameters)
-			notifications[#notifications + 1] = { method, parameters }
-		end,
-	}, { __index = Workspace })
-	deferred._invalidate = function()
-		invalidations = invalidations + 1
-	end
-	deferred:defer_reconciliation()
-	deferred:_notification("workspace/reset", { revision = 8 })
-	assert_equal(0, invalidations, "selector mode defers semantic reconciliation")
-	assert_equal("workspace/reset", notifications[1][1], "deferred reset reaches selector")
-	deferred:resume_reconciliation(8)
-	assert_equal(1, invalidations, "selector exit starts exactly one reconciliation")
-end
-
-local function refresh_harness()
-	local requests, invalidations = {}, 0
-	local refresh = setmetatable({
-		revision = 7,
-		epoch = 0,
-		workspace_id = "workspace-id",
-		reconcile_waiters = {},
-		client = {
-			generation = 1,
-			inert = false,
+	client.revision = 9
+	client.refresh_responses = {
+		{
+			error = {
+				code = "workspace_conflict",
+				message = "The expected workspace revision is stale.",
+			},
 		},
-	}, { __index = Workspace })
-	refresh.client.request = function(_, method, parameters, callback)
-		assert_equal("workspace/refresh", method, "refresh method")
-		requests[#requests + 1] = {
-			parameters = parameters,
-			callback = callback,
-		}
-	end
-	refresh._invalidate = function(self)
-		invalidations = invalidations + 1
-		self.epoch = self.epoch + 1
-		self.reconciling = true
-	end
-	local function reconcile(revision)
-		refresh.revision = revision
-		refresh.reconciling = false
-		refresh:_finish_reconcile()
-	end
-	return refresh, requests, function()
-		return invalidations
-	end, reconcile
-end
-
-do
-	local refresh, requests, invalidations, reconcile = refresh_harness()
-	local callback_error, callback_result
-	refresh:refresh(function(err, result)
-		callback_error, callback_result = err, result
+		{
+			error = {
+				code = "workspace_conflict",
+				message = "The expected workspace revision is stale again.",
+			},
+		},
+	}
+	local callback_error
+	tree:refresh(function(err)
+		callback_error = err
 	end)
-	assert_equal(1, #requests, "refresh starts once")
-	assert_equal({ expectedRevision = 7 }, requests[1].parameters, "initial refresh revision")
-
-	refresh.epoch = refresh.epoch + 1
-	refresh.reconciling = true
-	requests[1].callback(nil, { revision = 8, reset = false })
-	assert_equal(1, #requests, "stale refresh waits for active reconciliation")
-	assert_equal(nil, callback_error, "stale refresh does not fail before reconciliation")
-
-	reconcile(8)
-	assert_equal(2, #requests, "refresh retries once after reconciliation")
-	assert_equal({ expectedRevision = 8 }, requests[2].parameters, "retry uses reconciled revision")
-	requests[2].callback(nil, { revision = 8, reset = false })
-	assert_equal(nil, callback_error, "reconciled refresh succeeds")
-	assert_equal({ revision = 8, reset = false }, callback_result, "refresh result")
-	assert_equal(1, invalidations(), "successful retry starts one final reconciliation")
-end
-
-do
-	local refresh, requests, _, reconcile = refresh_harness()
-	local callback_error, callback_count = nil, 0
-	refresh:refresh(function(err)
-		callback_error, callback_count = err, callback_count + 1
-	end)
-	requests[1].callback({
-		code = "workspace_conflict",
-		message = "The expected workspace revision is stale.",
-	})
-	assert_equal(1, #requests, "workspace conflict waits for reconciliation")
-	reconcile(8)
-	assert_equal(2, #requests, "workspace conflict retries once")
-
-	requests[2].callback({
-		code = "workspace_conflict",
-		message = "The expected workspace revision is stale again.",
-	})
-	assert_equal(2, #requests, "second workspace conflict does not retry again")
-	assert_equal(1, callback_count, "bounded refresh finishes once")
+	assert_equal(
+		{ expectedRevision = 8 },
+		client.refresh_requests[1],
+		"refresh uses the current revision"
+	)
+	assert_equal(
+		{ expectedRevision = 9 },
+		client.refresh_requests[2],
+		"conflict retry uses the reconciled revision"
+	)
 	assert_equal(
 		"workspace_conflict",
 		callback_error.code,

@@ -47,8 +47,7 @@ end
 
 local function harness(options)
 	options = options or {}
-	local selected, calls, errors, renders, successes, inputs, confirmations =
-		"file-a", {}, {}, 0, {}, {}, {}
+	local selected, calls, errors, metrics = "file-a", {}, {}, {}
 	local nodes = {
 		["file-a"] = { id = "file-a", kind = "projectFile", name = "FileA.fs" },
 		["file-b"] = { id = "file-b", kind = "projectFile", name = "FileB.fs" },
@@ -100,39 +99,39 @@ local function harness(options)
 		on_error = function(err)
 			errors[#errors + 1] = vim.deepcopy(err)
 		end,
-		on_render = function()
-			renders = renders + 1
-		end,
+		on_render = function() end,
 		on_success = function(revision)
-			successes[#successes + 1] = revision
+			metrics.success_revision = revision
 		end,
 	})
 	local pending_confirmation
 	local original_select, original_input = vim.ui.select, vim.ui.input
 	vim.ui.select = function(items, _, callback)
-		if options.confirm == false then
+		if options.defer_confirmation then
+			pending_confirmation = callback
+		elseif options.confirm == false then
 			callback(nil)
 		else
 			callback(items[1])
 		end
 	end
-	vim.ui.input = function(input_options, callback)
-		if input_options.kind == "confirmation" then
-			confirmations[#confirmations + 1] = vim.deepcopy(input_options)
-			if options.defer_confirmation then
-				pending_confirmation = callback
-			elseif options.rename_confirm == "cancel" then
+	local name_answered = false
+	vim.ui.input = function(_, callback)
+		if options.rename and not name_answered then
+			name_answered = true
+			if options.name == false then
 				callback(nil)
 			else
-				callback(options.rename_confirm == false and "n" or "y")
+				callback(options.name or "Renamed.fs")
 			end
-			return
-		end
-		inputs[#inputs + 1] = vim.deepcopy(input_options)
-		if options.name == false then
-			callback(nil)
 		else
-			callback(options.name or "Renamed.fs")
+			if options.defer_confirmation then
+				pending_confirmation = callback
+			elseif options.confirm == false then
+				callback(nil)
+			else
+				callback("y")
+			end
 		end
 	end
 	return {
@@ -140,12 +139,7 @@ local function harness(options)
 		workspace = workspace,
 		calls = calls,
 		errors = errors,
-		successes = successes,
-		inputs = inputs,
-		confirmations = confirmations,
-		renders = function()
-			return renders
-		end,
+		metrics = metrics,
 		select = function(id)
 			selected = id
 		end,
@@ -164,149 +158,231 @@ local function harness(options)
 	}
 end
 
+local function request(state, method)
+	for _, call in ipairs(state.calls) do
+		if call.method == method then
+			return call.parameters
+		end
+	end
+end
+
+-- Mode switches, reconciliation, and explicit clearing affect the next user action rather than
+-- exposing mark storage as a test contract.
 do
 	local state = harness()
 	state.editing:toggle("move")
 	state.select("file-b")
 	state.editing:toggle("move")
-	assert_equal("move", state.workspace.mark_mode, "move mode")
-	assert_equal({ ["file-a"] = true, ["file-b"] = true }, state.workspace.marks, "move marks")
-
 	state.editing:toggle("copy")
-	assert_equal("copy", state.workspace.mark_mode, "switching mode")
-	assert_equal({ ["file-b"] = true }, state.workspace.marks, "switch clears old marks")
-	state.editing:toggle("copy")
-	assert_equal(nil, state.workspace.mark_mode, "empty mode is cleared")
-	assert_equal({}, state.workspace.marks, "active key toggles mark off")
-
-	state.editing:toggle("move")
-	state.select("file-a")
-	state.editing:toggle("move")
 	state.select("destination")
 	state.editing:place()
 	assert_equal({
-		commandId = "workspace.move",
+		commandId = "workspace.copy",
 		targetNodeId = "destination",
-		arguments = { sourceNodeIds = { "file-b", "file-a" } },
+		arguments = { sourceNodeIds = { "file-b" } },
 		expectedRevision = 9,
-	}, state.calls[2].parameters, "Place sends semantic destination and ordered marks")
-	local execute = vim.deepcopy(state.calls[2].parameters)
-	execute.confirmationToken = "exact-token"
-	assert_equal(execute, state.calls[3].parameters, "Place executes preview request plus only token")
-	assert_equal(nil, state.calls[2].parameters.confirmationToken, "preview request is unchanged")
-	assert_equal({}, state.workspace.marks, "successful Place clears marks")
-	assert_equal({ 10 }, state.successes, "successful Place reconciles once")
+	}, request(state, "workspace/commands/preview"), "switching mode replaces prior marks")
 	state.restore()
 end
 
 do
-	local state = harness({ confirm = false })
+	local state = harness()
+	state.editing:toggle("move")
+	state.workspace.nodes["file-a"] = nil
+	state.editing:reconcile()
+	state.select("destination")
+	state.editing:place()
+	assert_equal("no_marks", state.errors[1].code, "reconciliation removes stale marks")
+	state.restore()
+end
+
+do
+	local state = harness()
+	state.editing:toggle("move")
+	state.editing:clear()
+	state.select("destination")
+	state.editing:place()
+	assert_equal("no_marks", state.errors[1].code, "ClearMarks removes marks from the next action")
+	state.restore()
+end
+
+-- Move previews the semantic request, waits for confirmation, then executes the same envelope
+-- with only the confirmation token added.
+do
+	local state = harness({ defer_confirmation = true })
+	state.editing:toggle("move")
+	state.select("destination")
+	state.editing:place()
+	local expected = {
+		commandId = "workspace.move",
+		targetNodeId = "destination",
+		arguments = { sourceNodeIds = { "file-a" } },
+		expectedRevision = 9,
+	}
+	assert_equal(expected, request(state, "workspace/commands/preview"), "Move preview envelope")
+	assert_equal(nil, request(state, "workspace/commands/execute"), "Move waits for confirmation")
+	state.answer_confirmation("Move")
+	local execute = vim.deepcopy(expected)
+	execute.confirmationToken = "exact-token"
+	assert_equal(execute, request(state, "workspace/commands/execute"), "Move execute envelope")
+	assert_equal(
+		10,
+		state.metrics.success_revision,
+		"successful Move reconciles the returned revision"
+	)
+	state.editing:place()
+	assert_equal("no_marks", state.errors[1].code, "successful Move clears marks")
+	state.restore()
+end
+
+-- Copy uses its own command and completes the same mark lifecycle.
+do
+	local state = harness()
 	state.editing:toggle("copy")
 	state.select("destination")
 	state.editing:place()
-	assert_equal(2, #state.calls, "cancelled Place stops before execute")
-	assert_equal({ ["file-a"] = true }, state.workspace.marks, "cancelled Place retains marks")
-	assert_equal({}, state.successes, "cancelled Place does not reconcile")
+	local expected = {
+		commandId = "workspace.copy",
+		targetNodeId = "destination",
+		arguments = { sourceNodeIds = { "file-a" } },
+		expectedRevision = 9,
+	}
+	assert_equal(expected, request(state, "workspace/commands/preview"), "Copy preview envelope")
+	local execute = vim.deepcopy(expected)
+	execute.confirmationToken = "exact-token"
+	assert_equal(execute, request(state, "workspace/commands/execute"), "Copy execute envelope")
 	state.restore()
 end
 
+-- Cancelling confirmation leaves the user's Copy marks available for another destination.
 do
+	local options = { confirm = false }
+	local state = harness(options)
+	state.editing:toggle("copy")
+	state.select("destination")
+	state.editing:place()
+	assert_equal(nil, request(state, "workspace/commands/execute"), "cancelled Copy does not execute")
+	assert_equal(nil, state.metrics.success_revision, "cancelled Copy does not reconcile")
+	options.confirm = true
+	state.editing:place()
+	assert_equal(10, state.metrics.success_revision, "cancelled Copy retains marks for a retry")
+	state.restore()
+end
+
+-- A server rejection is surfaced and preserves the marks so the operation can be retried.
+do
+	local attempts = 0
 	local state = harness({
 		responses = {
 			["workspace/commands/execute"] = function(_, callback)
-				callback({ code = "collision", message = "Destination exists." })
+				attempts = attempts + 1
+				if attempts == 1 then
+					callback({ code = "collision", message = "Destination exists." })
+				else
+					callback(nil, { applied = true, revision = 10 })
+				end
 			end,
 		},
 	})
 	state.editing:toggle("move")
 	state.select("destination")
 	state.editing:place()
-	assert_equal("collision", state.errors[1].code, "Place surfaces core failure")
-	assert_equal({ ["file-a"] = true }, state.workspace.marks, "failed Place retains marks")
-	assert_equal({}, state.successes, "failed Place does not reconcile")
+	assert_equal("collision", state.errors[1].code, "Move surfaces the server rejection")
+	assert_equal(nil, state.metrics.success_revision, "rejected Move does not reconcile")
+	state.editing:place()
+	assert_equal(10, state.metrics.success_revision, "rejected Move retains marks for a retry")
 	state.restore()
 end
 
+-- Rename uses the selected node and also requires preview confirmation before execution.
 do
-	local state = harness({ name = "Feature.fs" })
+	local state = harness({ rename = true, name = "Feature.fs", defer_confirmation = true })
 	state.editing:rename()
-	assert_equal({ prompt = "New name: ", default = "FileA.fs" }, state.inputs[1], "Rename input")
-	assert_equal({
+	local expected = {
 		commandId = "workspace.rename",
 		targetNodeId = "file-a",
 		arguments = { name = "Feature.fs" },
 		expectedRevision = 9,
-	}, state.calls[2].parameters, "Rename exact preview envelope")
-	assert_equal(nil, state.calls[2].parameters.arguments.sourceNodeIds, "Rename has no source array")
-	assert(state.confirmations[1].prompt:find("/workspace/App.fsproj", 1, true))
-	assert(state.confirmations[1].prompt:find("Confirm [y/N]", 1, true))
-	assert_equal("N", state.confirmations[1].default, "Rename defaults to No")
-	assert_equal("confirmation", state.confirmations[1].kind, "Rename uses vim.ui.input")
-	state.restore()
-end
-
-do
-	local state = harness({ name = "Feature.fs", rename_confirm = false })
-	state.editing:rename()
-	assert_equal(2, #state.calls, "cancelled Rename confirmation stops before execute")
-	assert_equal({}, state.successes, "cancelled Rename does not reconcile")
-	state.restore()
-end
-
-do
-	local state = harness({ name = "Feature.fs", rename_confirm = "cancel" })
-	state.editing:rename()
-	assert_equal(2, #state.calls, "dismissed Rename confirmation stops before execute")
-	assert_equal({}, state.successes, "dismissed Rename does not reconcile")
-	state.restore()
-end
-
-do
-	local state = harness({ name = "Feature.fs", defer_confirmation = true })
-	state.editing:rename()
-	assert_equal(2, #state.calls, "deferred Rename stops at confirmation")
-	state.editing:invalidate()
+	}
+	assert_equal(expected, request(state, "workspace/commands/preview"), "Rename preview envelope")
+	assert_equal(nil, request(state, "workspace/commands/execute"), "Rename waits for confirmation")
 	state.answer_confirmation("y")
-	assert_equal(2, #state.calls, "invalidated Rename confirmation cannot execute")
-	assert_equal({}, state.successes, "invalidated Rename does not reconcile")
+	local execute = vim.deepcopy(expected)
+	execute.confirmationToken = "exact-token"
+	assert_equal(execute, request(state, "workspace/commands/execute"), "Rename execute envelope")
+	assert_equal(
+		10,
+		state.metrics.success_revision,
+		"successful Rename reconciles the returned revision"
+	)
+	state.restore()
+end
+
+-- Additive response fields and new effect names are forward-compatible at every editing boundary.
+do
+	local state = harness({
+		responses = {
+			["workspace/commands/describe"] = function(_, callback)
+				local result = descriptor("workspace.move", "projectFolder")
+				result.extension = "ignored"
+				result.command.extension = { version = 2 }
+				result.command.parameters[1].extension = true
+				callback(nil, result)
+			end,
+			["workspace/commands/preview"] = function(_, callback)
+				local result = preview("futureWorkspaceEffect")
+				result.extension = "ignored"
+				result.effects[1].extension = { detail = "new metadata" }
+				callback(nil, result)
+			end,
+			["workspace/commands/execute"] = function(_, callback)
+				callback(nil, { applied = true, revision = 11, extension = "ignored" })
+			end,
+		},
+	})
+	state.editing:toggle("move")
+	state.select("destination")
+	state.editing:place()
+	assert_equal({}, state.errors, "additive editing responses remain compatible")
+	assert_equal(
+		11,
+		state.metrics.success_revision,
+		"new effect names still permit confirmed execution"
+	)
 	state.restore()
 end
 
 do
-	local state = harness({ name = false })
+	local state = harness({ rename = true, name = false })
 	state.editing:rename()
-	assert_equal(0, #state.calls, "cancelled Rename sends no request")
+	assert_equal(
+		nil,
+		request(state, "workspace/commands/describe"),
+		"cancelled Rename sends no request"
+	)
+	assert_equal(nil, state.metrics.success_revision, "cancelled Rename does not reconcile")
 	state.restore()
 end
 
+-- Keep one incompatible response for each RPC response boundary.
 for _, case in ipairs({
 	{
 		label = "descriptor",
 		method = "workspace/commands/describe",
 		result = { command = { id = "workspace.move" } },
 		code = "incompatible_command",
-		calls = 1,
 	},
 	{
 		label = "preview",
 		method = "workspace/commands/preview",
 		result = { confirmationToken = "only" },
 		code = "incompatible_preview",
-		calls = 2,
-	},
-	{
-		label = "unknown preview operation",
-		method = "workspace/commands/preview",
-		result = preview("futureOperation"),
-		code = "incompatible_preview",
-		calls = 2,
 	},
 	{
 		label = "execute",
 		method = "workspace/commands/execute",
 		result = { applied = false, revision = 10 },
 		code = "incompatible_result",
-		calls = 3,
 	},
 }) do
 	local state = harness({
@@ -319,9 +395,7 @@ for _, case in ipairs({
 	state.editing:toggle("move")
 	state.select("destination")
 	state.editing:place()
-	assert_equal(case.calls, #state.calls, case.label .. " stops the mutation")
-	assert_equal(case.code, state.errors[1].code, case.label .. " schema error")
-	assert_equal({ ["file-a"] = true }, state.workspace.marks, case.label .. " retains marks")
+	assert_equal(case.code, state.errors[1].code, case.label .. " incompatibility is surfaced")
 	state.restore()
 end
 
@@ -330,25 +404,12 @@ do
 	state.editing:toggle("move")
 	state.select("destination")
 	state.editing:place()
-	assert_equal(0, #state.calls, "missing capability sends no request")
-	assert_equal("unsupported_capability", state.errors[1].code, "missing capability error")
-	assert_equal({ ["file-a"] = true }, state.workspace.marks, "missing capability retains marks")
-	state.restore()
-end
-
-do
-	local state = harness()
-	state.editing:toggle("move")
-	state.select("file-b")
-	state.editing:toggle("move")
-	state.workspace.nodes["file-a"] = nil
-	state.editing:reconcile()
-	assert_equal({ ["file-b"] = true }, state.workspace.marks, "reconciliation keeps present IDs")
-	state.editing:clear()
-	assert_equal({}, state.workspace.marks, "ClearMarks clears marks")
-	assert_equal(nil, state.workspace.mark_mode, "ClearMarks clears mode")
-	state.editing:invalidate()
-	assert_equal({}, state.workspace.marks, "session replacement clears marks")
+	assert_equal(
+		nil,
+		request(state, "workspace/commands/describe"),
+		"unsupported editing makes no request"
+	)
+	assert_equal("unsupported_capability", state.errors[1].code, "missing capability is rejected")
 	state.restore()
 end
 

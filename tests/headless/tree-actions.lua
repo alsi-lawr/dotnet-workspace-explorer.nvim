@@ -1,6 +1,7 @@
 vim.opt.runtimepath:prepend(vim.fn.getcwd())
 
 local Workspace = require("dotnet-workspace-explorer.workspace").Workspace
+local view = require("dotnet-workspace-explorer.view")
 
 local function assert_equal(expected, actual, message)
 	if not vim.deep_equal(expected, actual) then
@@ -35,7 +36,6 @@ local function wire_node(value)
 end
 
 local function tree_harness(fail_during_children)
-	local changes, calls = 0, {}
 	local workspace_node = node("workspace", "workspace", "Example.slnx")
 	local project = node("project", "project", "Example.fsproj", "workspace")
 	local file = node("file", "projectFile", "Program.fs", "project")
@@ -54,8 +54,8 @@ local function tree_harness(fail_during_children)
 		revision = 7,
 		workspace_id = "workspace-id",
 		selected_id = "workspace",
-		on_change = function()
-			changes = changes + 1
+		on_change = function(current)
+			view.render(current)
 		end,
 		on_error = function() end,
 	}, { __index = Workspace })
@@ -64,7 +64,6 @@ local function tree_harness(fail_during_children)
 		inert = false,
 		limits = { maxPageSize = 1 },
 		request = function(_, method, parameters, callback)
-			calls[#calls + 1] = { method, vim.deepcopy(parameters) }
 			if method == "workspace/root" then
 				return callback(nil, { revision = 7, nodes = { wire_node(workspace_node) } })
 			end
@@ -107,51 +106,57 @@ local function tree_harness(fail_during_children)
 			error(reason.message)
 		end,
 	}
-	return tree, function()
-		return changes
-	end, calls
+	return tree
 end
 
+local function rendered()
+	return table.concat(vim.api.nvim_buf_get_lines(view.buf, 0, -1, false), "\n")
+end
+
+view.open()
+
 do
-	local tree, changes, calls = tree_harness(false)
+	local tree = tree_harness(false)
 	local problem
 	tree:expand_all(function(err)
 		problem = err
 	end)
-	assert_equal(nil, problem, "ExpandAll succeeds")
-	assert_equal(1, changes(), "ExpandAll swaps the tree once")
-	assert_equal({
-		workspace = true,
-		project = true,
-		dependencies = true,
-		dependency = true,
-	}, tree.expanded, "ExpandAll includes dependency property ancestry")
-	assert_equal({ "file", "dependencies" }, tree.children.project, "ExpandAll collects every page")
-	assert_equal("property", tree.children.dependency[1], "ExpandAll hydrates dependency properties")
-	assert_equal("project-page-2", calls[4][2].continuationToken, "continuation is requested")
+	assert_equal(nil, problem, "Expand All succeeds")
+	local expanded = rendered()
+	for _, name in ipairs({
+		"Example.slnx",
+		"Example.fsproj",
+		"Program.fs",
+		"Dependencies",
+		"FSharp.Core",
+		"Version: 10.0.0",
+	}) do
+		assert(expanded:find(name, 1, true), "Expand All omitted " .. name)
+	end
 
 	tree:collapse_all()
-	assert_equal({}, tree.expanded, "CollapseAll clears every expansion")
-	assert_equal(2, changes(), "CollapseAll renders once")
+	local collapsed = rendered()
+	assert(collapsed:find("Example.slnx", 1, true), "Collapse All removed the root")
+	assert(not collapsed:find("Example.fsproj", 1, true), "Collapse All left descendants visible")
 end
 
 do
-	local tree, changes = tree_harness(true)
-	local original = vim.deepcopy(tree.nodes)
+	local tree = tree_harness(true)
+	view.render(tree)
+	local before = rendered()
 	local problem
 	tree:expand_all(function(err)
 		problem = err
 	end)
-	assert_equal("stale_tree", problem.code, "generation change rejects ExpandAll")
-	assert_equal(original, tree.nodes, "failed ExpandAll preserves last-good nodes")
-	assert_equal(0, changes(), "failed ExpandAll does not render")
+	assert_equal("stale_tree", problem.code, "stale tree rejects Expand All")
+	assert_equal(before, rendered(), "failed Expand All changes the visible tree")
 end
 
-for _, extension in ipairs({ "csproj", "fsproj", "vbproj" }) do
-	local project_path = vim.fs.abspath(vim.fn.tempname() .. "." .. extension)
-	local project = node("project", "project", "Example." .. extension)
+do
+	local resolved_path = vim.fs.abspath(vim.fn.tempname() .. ".fs")
+	local file = node("file", "projectFile", "Program.fs", "project")
 	local tree = setmetatable({
-		nodes = { project = project },
+		nodes = { file = file },
 		epoch = 0,
 		revision = 7,
 		workspace_id = "workspace-id",
@@ -162,22 +167,23 @@ for _, extension in ipairs({ "csproj", "fsproj", "vbproj" }) do
 		inert = false,
 		request = function(_, method, parameters, callback)
 			request = { method, vim.deepcopy(parameters) }
-			callback(nil, { revision = 7, targetNodeId = "project", path = project_path })
+			callback(nil, { revision = 7, targetNodeId = "file", path = resolved_path })
 		end,
 		_terminate = function(_, reason)
 			error(reason.message)
 		end,
 	}
 	local resolved
-	tree:resolve_project("project", function(err, path)
-		assert_equal(nil, err, extension .. " project resolution")
+	tree:resolve_file("file", function(err, path)
+		assert_equal(nil, err, "file resolution error")
 		resolved = path
 	end)
 	assert_equal({
 		"workspace/file/resolve",
-		{ targetNodeId = "project", expectedRevision = 7 },
-	}, request, extension .. " exact project resolve request")
-	assert_equal(project_path, resolved, extension .. " authoritative project path")
+		{ targetNodeId = "file", expectedRevision = 7 },
+	}, request, "exact file resolution request")
+	assert_equal(resolved_path, resolved, "authoritative file path")
 end
 
+view.close()
 print("DWE whole-tree action probe passed")

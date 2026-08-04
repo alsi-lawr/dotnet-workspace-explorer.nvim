@@ -9,35 +9,16 @@ local required_capabilities = {
 	"workspace.commands.execute",
 }
 
-local effect_operations = {
-	create = true,
-	modify = true,
-	trash = true,
-	rename = true,
-	move = true,
-	moveInSolution = true,
-	copy = true,
-	addToProject = true,
-	removeFromProject = true,
-	addToSolution = true,
-	removeFromSolution = true,
-}
-
 local function map(value)
 	return type(value) == "table" and not vim.islist(value)
 end
 
-local function exact(value, keys)
+local function required_keys(value, keys)
 	if not map(value) then
 		return false
 	end
-	for key in pairs(value) do
-		if keys[key] == nil then
-			return false
-		end
-	end
-	for key, required in pairs(keys) do
-		if required and value[key] == nil then
+	for key in pairs(keys) do
+		if value[key] == nil then
 			return false
 		end
 	end
@@ -63,12 +44,12 @@ local function string_list(value)
 end
 
 local function compatible_descriptor(result, command_id, target_kind)
-	if not exact(result, { command = true }) then
+	if not required_keys(result, { command = true }) then
 		return false
 	end
 	local command = result.command
 	if
-		not exact(command, {
+		not required_keys(command, {
 			id = true,
 			name = true,
 			access = true,
@@ -97,7 +78,7 @@ local function compatible_descriptor(result, command_id, target_kind)
 		return false
 	end
 	local parameter = command.parameters[1]
-	return exact(parameter, { id = true, name = true, type = true, required = true })
+	return required_keys(parameter, { id = true, name = true, type = true, required = true })
 		and parameter.id == parameter_id
 		and nonempty(parameter.name)
 		and parameter.type == parameter_type
@@ -106,7 +87,7 @@ end
 
 local function compatible_preview(result)
 	if
-		not exact(result, {
+		not required_keys(result, {
 			confirmationToken = true,
 			expiresAtUtc = true,
 			summary = true,
@@ -122,8 +103,8 @@ local function compatible_preview(result)
 	end
 	for _, effect in ipairs(result.effects) do
 		if
-			not exact(effect, { operation = true, target = true, recursive = true })
-			or not effect_operations[effect.operation]
+			not required_keys(effect, { operation = true, target = true, recursive = true })
+			or not nonempty(effect.operation)
 			or not nonempty(effect.target)
 			or type(effect.recursive) ~= "boolean"
 		then
@@ -134,7 +115,7 @@ local function compatible_preview(result)
 end
 
 local function compatible_applied(result)
-	return exact(result, { applied = true, revision = true })
+	return required_keys(result, { applied = true, revision = true })
 		and result.applied == true
 		and type(result.revision) == "number"
 		and result.revision >= 0

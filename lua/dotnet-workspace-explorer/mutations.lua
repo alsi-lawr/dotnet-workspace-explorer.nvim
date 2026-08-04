@@ -19,17 +19,12 @@ local function map(value)
 	return type(value) == "table" and not vim.islist(value)
 end
 
-local function exact_keys(value, allowed)
+local function required_keys(value, keys)
 	if not map(value) then
 		return false
 	end
-	for key in pairs(value) do
-		if allowed[key] == nil then
-			return false
-		end
-	end
-	for key, required in pairs(allowed) do
-		if required and value[key] == nil then
+	for key in pairs(keys) do
+		if value[key] == nil then
 			return false
 		end
 	end
@@ -55,7 +50,7 @@ local function string_list(value)
 end
 
 local function valid_parameter(value)
-	return exact_keys(value, {
+	return required_keys(value, {
 		id = true,
 		name = true,
 		type = true,
@@ -66,12 +61,12 @@ local function valid_parameter(value)
 end
 
 local function compatible_descriptor(result, command_id, target_kind)
-	if not exact_keys(result, { command = true }) then
+	if not required_keys(result, { command = true }) then
 		return false
 	end
 	local descriptor = result.command
 	if
-		not exact_keys(descriptor, {
+		not required_keys(descriptor, {
 			id = true,
 			name = true,
 			access = true,
@@ -127,7 +122,6 @@ local option_keys = {
 	displayName = true,
 	description = true,
 	execution = true,
-	language = false,
 }
 local add_existing_targets = {
 	workspace = true,
@@ -138,7 +132,7 @@ local add_existing_targets = {
 
 local function compatible_option(value, add_existing, target_kind)
 	if
-		not exact_keys(value, option_keys)
+		not required_keys(value, option_keys)
 		or not nonempty(value.selectionId)
 		or not nonempty(value.displayName)
 		or type(value.description) ~= "string"
@@ -165,7 +159,7 @@ end
 
 local function compatible_options(result, revision, add_existing, target_kind)
 	if
-		not exact_keys(result, { revision = true, options = true })
+		not required_keys(result, { revision = true, options = true })
 		or result.revision ~= revision
 		or type(result.options) ~= "table"
 		or not vim.islist(result.options)
@@ -182,29 +176,17 @@ local function compatible_options(result, revision, add_existing, target_kind)
 	return true
 end
 
-local effect_operations = {
-	create = true,
-	modify = true,
-	trash = true,
-	addToProject = true,
-	removeFromProject = true,
-	addToSolution = true,
-	removeFromSolution = true,
-}
-
 local function compatible_effect(value)
-	return exact_keys(value, {
+	return required_keys(value, {
 		operation = true,
 		target = true,
 		recursive = true,
-	}) and effect_operations[value.operation] == true and nonempty(value.target) and type(
-		value.recursive
-	) == "boolean"
+	}) and nonempty(value.operation) and nonempty(value.target) and type(value.recursive) == "boolean"
 end
 
 local function compatible_preview(result)
 	if
-		not exact_keys(result, {
+		not required_keys(result, {
 			confirmationToken = true,
 			expiresAtUtc = true,
 			summary = true,
@@ -227,20 +209,20 @@ local function compatible_preview(result)
 end
 
 local function compatible_applied(result)
-	return exact_keys(result, { applied = true, revision = true })
+	return required_keys(result, { applied = true, revision = true })
 		and result.applied == true
 		and integer(result.revision)
 end
 
 local function compatible_operation(result)
-	return exact_keys(result, { operationId = true, revision = true })
+	return required_keys(result, { operationId = true, revision = true })
 		and nonempty(result.operationId)
 		and integer(result.revision)
 end
 
 local function compatible_diagnostic(value, workspace_id, revision)
 	if
-		not exact_keys(value, {
+		not required_keys(value, {
 			workspaceId = true,
 			revision = true,
 			severity = true,
@@ -263,7 +245,7 @@ end
 local function compatible_completion(parameters, pending)
 	local outcome = parameters.outcome
 	if
-		not exact_keys(parameters, {
+		not required_keys(parameters, {
 			workspaceId = true,
 			operationId = true,
 			sequence = true,

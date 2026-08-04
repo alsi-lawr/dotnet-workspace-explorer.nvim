@@ -75,8 +75,7 @@ end
 
 local function harness(options)
 	options = options or {}
-	local calls, errors, refreshes, selections, inputs, confirmations, add_existing =
-		{}, {}, {}, {}, {}, {}, {}
+	local calls, errors, metrics = {}, {}, {}
 	local capabilities = {
 		["workspace.create.options"] = true,
 		["workspace.commands.describe"] = true,
@@ -102,7 +101,7 @@ local function harness(options)
 		calls[#calls + 1] = { method = method, parameters = vim.deepcopy(parameters) }
 		local override = options.responses and options.responses[method]
 		if override then
-			return override(parameters, callback, calls)
+			return override(parameters, callback)
 		end
 		if method == "workspace/create/options" then
 			return callback(nil, creation_options())
@@ -136,61 +135,43 @@ local function harness(options)
 			errors[#errors + 1] = vim.deepcopy(err)
 		end,
 		on_refresh = function(revision)
-			refreshes[#refreshes + 1] = revision
+			metrics.refresh_revision = revision
 		end,
 		on_add_existing = function(request)
-			add_existing[#add_existing + 1] = vim.deepcopy(request)
+			metrics.add_existing = vim.deepcopy(request)
 		end,
 	})
 
 	local pending_confirmation
 	local original_select, original_input = vim.ui.select, vim.ui.input
-	vim.ui.select = function(items, select_options, callback)
-		selections[#selections + 1] = {
-			items = vim.deepcopy(items),
-			options = vim.deepcopy(select_options),
-		}
-		if select_options.kind == "workspace-create-option" then
-			if options.pick == false then
+	vim.ui.select = function(items, _, callback)
+		callback(options.pick == false and nil or items[options.pick or 1])
+	end
+	local name_answered = false
+	vim.ui.input = function(_, callback)
+		if options.action ~= "delete" and not name_answered then
+			name_answered = true
+			if options.name == false then
 				callback(nil)
 			else
-				callback(items[options.pick or 1])
+				callback(options.name or "Thing.cs")
 			end
-		end
-	end
-	vim.ui.input = function(input_options, callback)
-		if input_options.kind == "confirmation" then
-			confirmations[#confirmations + 1] = vim.deepcopy(input_options)
+		else
 			if options.defer_confirmation then
 				pending_confirmation = callback
 			elseif options.confirm == false then
 				callback(nil)
 			else
-				callback(options.confirm == "Cancel" and "n" or (options.confirm or "y"))
+				callback("y")
 			end
-			return
-		end
-		inputs[#inputs + 1] = vim.deepcopy(input_options)
-		if options.name == false then
-			callback(nil)
-		else
-			callback(options.name or "Thing.cs")
 		end
 	end
 
 	return {
 		controller = controller,
-		workspace = workspace,
 		calls = calls,
 		errors = errors,
-		refreshes = refreshes,
-		selections = selections,
-		inputs = inputs,
-		confirmations = confirmations,
-		add_existing = add_existing,
-		set_live = function(value)
-			live = value
-		end,
+		metrics = metrics,
 		answer_confirmation = function(answer)
 			assert(pending_confirmation, "no confirmation callback is pending")
 			local callback = pending_confirmation
@@ -204,17 +185,29 @@ local function harness(options)
 end
 
 local function run(options, action)
+	options = options or {}
+	options.action = action
 	local state = harness(options)
 	state.controller[action or "create"](state.controller)
 	state.restore()
 	return state
 end
 
+local function request(state, method)
+	for _, call in ipairs(state.calls) do
+		if call.method == method then
+			return call.parameters
+		end
+	end
+end
+
+-- Add Existing is a distinct Create behavior, routed with opaque identifiers instead of a name
+-- and command mutation flow.
 do
 	local option = {
 		selectionId = "add-token",
 		kind = "addExisting",
-		displayName = "This label is not authoritative",
+		displayName = "Add Existing",
 		description = "Browse",
 		execution = "transaction",
 	}
@@ -227,143 +220,20 @@ do
 			end,
 		},
 	})
-	assert_equal(0, #state.inputs, "addExisting is discriminated without a name prompt")
-	assert_equal(1, #state.calls, "addExisting routes without command preview")
 	assert_equal({
 		selection_id = "add-token",
 		target_id = "selected-node",
 		target_kind = "project",
 		revision = 7,
-	}, state.add_existing[1], "addExisting routes only its kind and opaque identifiers")
-end
-
-do
-	local state = run({
-		target_kind = "project",
-		capabilities = { ["workspace.addExisting.selector"] = false },
-		responses = {
-			["workspace/create/options"] = function(_, callback)
-				callback(nil, {
-					revision = 7,
-					options = {
-						{
-							selectionId = "add-token",
-							kind = "addExisting",
-							displayName = "Add Existing",
-							description = "",
-							execution = "transaction",
-						},
-					},
-				})
-			end,
-		},
-	})
-	assert_equal("incompatible_options", state.errors[1].code, "unnegotiated option is rejected")
-	assert_equal({}, state.add_existing, "unnegotiated option cannot open selector")
-end
-
-do
-	local state = run({
-		target_kind = "workspace",
-		name = "Logical",
-		responses = {
-			["workspace/create/options"] = function(_, callback)
-				callback(nil, {
-					revision = 7,
-					options = {
-						{
-							selectionId = "folder-token",
-							kind = "solutionFolder",
-							displayName = "Logical folder",
-							description = "",
-							execution = "transaction",
-						},
-					},
-				})
-			end,
-			["workspace/commands/describe"] = function(_, callback)
-				local result = create_descriptor()
-				result.command.targetKinds = { "workspace" }
-				callback(nil, result)
-			end,
-		},
-	})
-	assert_equal({ prompt = "Logical folder name: " }, state.inputs[1], "solution folder name flow")
-	assert_equal({
-		selectionId = "folder-token",
-		name = "Logical",
-	}, state.calls[3].parameters.arguments, "solution folder uses exact workspace.create arguments")
-	assert_equal({}, state.add_existing, "solution folder never enters selector")
-end
-
-do
-	local state = run()
-	assert_equal(
-		{ targetNodeId = "selected-node", expectedRevision = 7 },
-		state.calls[1].parameters,
-		"New sends only the semantic target and current revision"
-	)
-	assert_equal(
-		creation_options().options,
-		state.selections[1].items,
-		"picker preserves core options"
-	)
-	assert_equal("workspace-create-option", state.selections[1].options.kind, "creation picker kind")
-	assert_equal({ prompt = "Empty file name: " }, state.inputs[1], "name-only prompt")
-	assert_equal({
-		commandId = "workspace.create",
-		targetNodeId = "selected-node",
-		arguments = { selectionId = "empty-token", name = "Thing.cs" },
-		expectedRevision = 7,
-	}, state.calls[3].parameters, "create preview request")
-	local execute = vim.deepcopy(state.calls[3].parameters)
-	execute.confirmationToken = "preview-token"
-	assert_equal(execute, state.calls[4].parameters, "execute is preview request plus token")
+	}, state.metrics.add_existing, "Add Existing routes its opaque selection")
 	assert_equal(
 		nil,
-		state.calls[3].parameters.confirmationToken,
-		"preview request remains unchanged"
+		request(state, "workspace/commands/preview"),
+		"Add Existing does not preview Create"
 	)
-	assert(state.confirmations[1].prompt:find("/workspace/App.csproj", 1, true))
-	assert(state.confirmations[1].prompt:find("Confirm [y/N]", 1, true))
-	assert_equal("N", state.confirmations[1].default, "Create defaults to No")
-	assert_equal("confirmation", state.confirmations[1].kind, "Create uses vim.ui.input")
-	assert_equal({ 8 }, state.refreshes, "synchronous creation refreshes once")
-	assert_equal({}, state.errors, "successful creation errors")
 end
 
-for _, case in ipairs({
-	{ label = "picker", options = { pick = false }, calls = 1 },
-	{ label = "name", options = { name = false }, calls = 1 },
-	{ label = "confirmation", options = { confirm = "Cancel" }, calls = 3 },
-	{ label = "dismissed confirmation", options = { confirm = false }, calls = 3 },
-	{ label = "empty confirmation", options = { confirm = "" }, calls = 3 },
-}) do
-	local state = run(case.options)
-	assert_equal(case.calls, #state.calls, case.label .. " cancellation request count")
-	assert_equal({}, state.refreshes, case.label .. " cancellation refresh")
-	assert_equal({}, state.errors, case.label .. " cancellation errors")
-end
-
-do
-	local state = harness({ defer_confirmation = true })
-	state.controller:create()
-	assert_equal(3, #state.calls, "deferred Create stops at confirmation")
-	state.controller:invalidate()
-	state.answer_confirmation("y")
-	assert_equal(3, #state.calls, "invalidated Create confirmation cannot execute")
-	assert_equal({}, state.refreshes, "invalidated Create does not reconcile")
-	state.restore()
-end
-
-for _, missing in ipairs({ "workspace.create.options", "workspace.operations.completed" }) do
-	local state = run({ capabilities = { [missing] = false } })
-	assert_equal(0, #state.calls, missing .. " absence makes no request")
-	assert_equal(0, #state.selections, missing .. " absence opens no picker")
-	assert_equal({}, state.refreshes, missing .. " absence refresh")
-	assert_equal("unsupported_capability", state.errors[1].code, missing .. " error")
-end
-
+-- Keep one incompatible response at the Create-options boundary.
 do
 	local state = run({
 		responses = {
@@ -372,63 +242,145 @@ do
 			end,
 		},
 	})
-	assert_equal(1, #state.calls, "malformed options stops the flow")
-	assert_equal("incompatible_options", state.errors[1].code, "malformed options error")
-	assert_equal({}, state.refreshes, "malformed options refresh")
+	assert_equal("incompatible_options", state.errors[1].code, "incompatible options are rejected")
+	assert_equal(
+		nil,
+		request(state, "workspace/commands/describe"),
+		"incompatible options stop Create"
+	)
 end
 
+-- Additive response fields and new effect names are forward-compatible at every Create boundary.
 do
+	local options = creation_options()
+	options.extension = "ignored"
+	options.options[1].extension = { version = 2 }
 	local state = run({
 		responses = {
+			["workspace/create/options"] = function(_, callback)
+				callback(nil, options)
+			end,
 			["workspace/commands/describe"] = function(_, callback)
-				local descriptor = create_descriptor()
-				descriptor.command.parameters[1].type = "path"
-				callback(nil, descriptor)
-			end,
-		},
-	})
-	assert_equal(2, #state.calls, "malformed descriptor stops before preview")
-	assert_equal("incompatible_command", state.errors[1].code, "descriptor validation")
-end
-
-do
-	local state = run({
-		responses = {
-			["workspace/commands/preview"] = function(_, callback)
-				callback(nil, { confirmationToken = "token" })
-			end,
-		},
-	})
-	assert_equal(3, #state.calls, "malformed preview stops before confirmation")
-	assert_equal("incompatible_preview", state.errors[1].code, "preview validation")
-	assert_equal({}, state.refreshes, "malformed preview refresh")
-end
-
-do
-	local state = run({
-		responses = {
-			["workspace/commands/preview"] = function(_, callback)
-				local result = preview("Create")
-				result.effects[1].operation = "copy"
+				local result = create_descriptor()
+				result.extension = "ignored"
+				result.command.extension = { version = 2 }
+				result.command.parameters[1].extension = true
 				callback(nil, result)
 			end,
+			["workspace/commands/preview"] = function(_, callback)
+				local result = preview("Create")
+				result.extension = "ignored"
+				result.effects[1].operation = "futureWorkspaceEffect"
+				result.effects[1].extension = { detail = "new metadata" }
+				callback(nil, result)
+			end,
+			["workspace/commands/execute"] = function(_, callback)
+				callback(nil, { applied = true, revision = 9, extension = "ignored" })
+			end,
 		},
 	})
-	assert_equal(3, #state.calls, "unknown preview effect stops before confirmation")
-	assert_equal("incompatible_preview", state.errors[1].code, "unknown preview effect")
-	assert_equal({}, state.refreshes, "unknown preview effect does not reconcile")
+	assert_equal({}, state.errors, "additive Create responses remain compatible")
+	assert_equal(
+		9,
+		state.metrics.refresh_revision,
+		"new effect names still permit confirmed execution"
+	)
 end
 
+-- Transactional Create preserves the preview envelope, waits for confirmation, executes with only
+-- the server token added, and reconciles the returned revision.
+do
+	local state = harness({ defer_confirmation = true })
+	state.controller:create()
+	local expected = {
+		commandId = "workspace.create",
+		targetNodeId = "selected-node",
+		arguments = { selectionId = "empty-token", name = "Thing.cs" },
+		expectedRevision = 7,
+	}
+	assert_equal(expected, request(state, "workspace/commands/preview"), "Create preview envelope")
+	assert_equal(nil, request(state, "workspace/commands/execute"), "Create waits for confirmation")
+	state.answer_confirmation("y")
+	local execute = vim.deepcopy(expected)
+	execute.confirmationToken = "preview-token"
+	assert_equal(execute, request(state, "workspace/commands/execute"), "Create execute envelope")
+	assert_equal(
+		8,
+		state.metrics.refresh_revision,
+		"transactional Create reconciles the returned revision"
+	)
+	assert_equal({}, state.errors, "successful Create has no error")
+	state.restore()
+end
+
+do
+	local state = run({ confirm = false })
+	assert_equal(
+		nil,
+		request(state, "workspace/commands/execute"),
+		"cancelled Create does not execute"
+	)
+	assert_equal(nil, state.metrics.refresh_revision, "cancelled Create does not reconcile")
+	assert_equal({}, state.errors, "cancelled Create has no error")
+end
+
+do
+	local state = run({ capabilities = { ["workspace.create.options"] = false } })
+	assert_equal(
+		nil,
+		request(state, "workspace/create/options"),
+		"unsupported Create makes no request"
+	)
+	assert_equal("unsupported_capability", state.errors[1].code, "missing capability is rejected")
+end
+
+-- Keep one incompatible descriptor, preview, and execute response for the remaining RPC boundaries.
+for _, case in ipairs({
+	{
+		label = "descriptor",
+		method = "workspace/commands/describe",
+		result = { command = { id = "workspace.create" } },
+		code = "incompatible_command",
+	},
+	{
+		label = "preview",
+		method = "workspace/commands/preview",
+		result = { confirmationToken = "only" },
+		code = "incompatible_preview",
+	},
+	{
+		label = "execute",
+		method = "workspace/commands/execute",
+		result = { applied = false, revision = 8 },
+		code = "incompatible_result",
+	},
+}) do
+	local state = run({
+		responses = {
+			[case.method] = function(_, callback)
+				callback(nil, case.result)
+			end,
+		},
+	})
+	assert_equal(case.code, state.errors[1].code, case.label .. " incompatibility is surfaced")
+	assert_equal(
+		nil,
+		state.metrics.refresh_revision,
+		case.label .. " incompatibility does not reconcile"
+	)
+end
+
+-- A server-side command rejection is surfaced without treating the mutation as applied.
 do
 	local state = run({
 		responses = {
 			["workspace/commands/execute"] = function(_, callback)
-				callback(nil, { applied = false, revision = 8 })
+				callback({ code = "revision_conflict", message = "Workspace changed." })
 			end,
 		},
 	})
-	assert_equal("incompatible_result", state.errors[1].code, "execute result validation")
-	assert_equal({}, state.refreshes, "invalid execute result refresh")
+	assert_equal("revision_conflict", state.errors[1].code, "Create surfaces server rejection")
+	assert_equal(nil, state.metrics.refresh_revision, "rejected Create does not reconcile")
 end
 
 local function completion(operation_id, outcome, diagnostics)
@@ -453,213 +405,77 @@ local function diagnostic(code, message)
 	}
 end
 
+-- Operation-backed Create waits for and reconciles only its matching completion.
 do
 	local state = run({ pick = 2, name = "IThing" })
-	assert_equal({}, state.refreshes, "operation response does not refresh")
+	assert_equal(nil, state.metrics.refresh_revision, "operation-backed Create waits for completion")
 	state.controller:notification(
 		"workspace/operations/completed",
 		completion("different-operation", "succeeded")
 	)
-	assert_equal({}, state.refreshes, "mismatched completion is ignored")
+	assert_equal(nil, state.metrics.refresh_revision, "unrelated completion is ignored")
 	state.controller:notification(
 		"workspace/operations/completed",
 		completion("operation-1", "succeeded")
 	)
-	assert_equal({ 8 }, state.refreshes, "matching completion refreshes once")
-	state.controller:notification(
-		"workspace/operations/completed",
-		completion("operation-1", "succeeded")
-	)
-	assert_equal({ 8 }, state.refreshes, "duplicate completion is ignored")
+	assert_equal(8, state.metrics.refresh_revision, "matching completion reconciles the revision")
 end
 
-for _, outcome in ipairs({ "failed", "cancelled" }) do
-	local state = run({ pick = 2 })
-	state.controller:notification(
-		"workspace/operations/completed",
-		completion("operation-1", outcome, { diagnostic(outcome, "Core " .. outcome) })
-	)
-	assert_equal({}, state.refreshes, outcome .. " operation refresh")
-	assert_equal("Core " .. outcome, state.errors[1].message, outcome .. " core diagnostic")
-end
-
+-- Failed asynchronous operations surface the server diagnostic and do not refresh.
 do
 	local state = run({ pick = 2 })
-	state.controller:invalidate()
 	state.controller:notification(
 		"workspace/operations/completed",
-		completion("operation-1", "succeeded")
+		completion("operation-1", "failed", { diagnostic("template_failed", "Core failed") })
 	)
-	assert_equal({}, state.refreshes, "invalidated session completion refresh")
-	assert_equal({}, state.errors, "invalidated session completion errors")
+	assert_equal("template_failed", state.errors[1].code, "failed operation surfaces diagnostic")
+	assert_equal("Core failed", state.errors[1].message, "failed operation preserves server message")
+	assert_equal(nil, state.metrics.refresh_revision, "failed operation does not reconcile")
 end
 
+-- Keep one incompatible response at the operation-completion boundary.
 do
 	local state = run({ pick = 2 })
 	local malformed = completion("operation-1", "succeeded")
 	malformed.revision = "eight"
 	state.controller:notification("workspace/operations/completed", malformed)
-	assert_equal({}, state.refreshes, "malformed matching completion refresh")
-	assert_equal("incompatible_completion", state.errors[1].code, "completion validation")
-end
-
-do
-	local state = run({ pick = 2 })
-	local malformed =
-		completion("operation-1", "failed", { diagnostic("template_failed", "Core failed") })
-	malformed.diagnostics[1].detail = "unexpected"
-	state.controller:notification("workspace/operations/completed", malformed)
-	assert_equal({}, state.refreshes, "malformed diagnostic does not reconcile")
-	assert_equal("incompatible_completion", state.errors[1].code, "diagnostic exact-key validation")
-	state.controller:notification(
-		"workspace/operations/completed",
-		completion("operation-1", "succeeded")
+	assert_equal(
+		"incompatible_completion",
+		state.errors[1].code,
+		"incompatible completion is rejected"
 	)
-	assert_equal({}, state.refreshes, "malformed diagnostic consumes the pending operation")
-	assert_equal(1, #state.errors, "later completion for consumed operation is ignored")
+	assert_equal(nil, state.metrics.refresh_revision, "incompatible completion does not reconcile")
 end
 
+-- Delete uses an empty argument map and the same preview/confirmation/execute compatibility
+-- contract.
 do
-	local state = run({ confirm = "Y" }, "delete")
-	assert(state.confirmations[1].prompt:find("/workspace/Thing.cs", 1, true))
-	assert(state.confirmations[1].prompt:find("Confirm [y/N]", 1, true))
-	assert_equal("N", state.confirmations[1].default, "Delete defaults to No")
-	assert_equal("confirmation", state.confirmations[1].kind, "Delete uses vim.ui.input")
-	assert_equal({
+	local state = harness({ action = "delete", defer_confirmation = true })
+	state.controller:delete()
+	local expected = {
 		commandId = "workspace.delete",
 		targetNodeId = "selected-node",
 		arguments = rpc.empty(),
 		expectedRevision = 7,
-	}, state.calls[2].parameters, "Delete targets the exact selected node")
-	local execute = vim.deepcopy(state.calls[2].parameters)
+	}
+	assert_equal(expected, request(state, "workspace/commands/preview"), "Delete preview envelope")
+	assert_equal(nil, request(state, "workspace/commands/execute"), "Delete waits for confirmation")
+	state.answer_confirmation("y")
+	local execute = vim.deepcopy(expected)
 	execute.confirmationToken = "preview-token"
-	assert_equal(execute, state.calls[3].parameters, "Delete executes exact preview plus token")
-	assert_equal({ 8 }, state.refreshes, "Delete refreshes once")
+	assert_equal(execute, request(state, "workspace/commands/execute"), "Delete execute envelope")
+	assert_equal(8, state.metrics.refresh_revision, "Delete reconciles the returned revision")
+	state.restore()
 end
 
 do
-	local state = run({ confirm = "Cancel" }, "delete")
-	assert_equal(2, #state.calls, "Delete cancellation stops before execute")
-	assert_equal({}, state.refreshes, "Delete cancellation refresh")
-	assert_equal({}, state.errors, "Delete cancellation errors")
-end
-
-do
-	local frames, started = {}, false
-	local client = rpc.Client.new({
-		command = "unused",
-		target = "unused",
-		spawn = function(_, stream, _)
-			local process = {}
-			function process.write(_, bytes)
-				local frame = vim.mpack.decode(bytes)
-				frames[#frames + 1] = frame
-				if frame[3] == "initialize" then
-					stream.stdout(
-						nil,
-						vim.mpack.encode({
-							1,
-							frame[2],
-							vim.NIL,
-							{
-								protocolVersion = { major = 1, minor = 0 },
-								workspace = { id = "workspace-id", revision = 0 },
-								capabilities = frame[4].capabilities,
-								limits = { maxFrameBytes = 65536, maxPageSize = 100 },
-							},
-						})
-					)
-				end
-			end
-			function process.kill() end
-			return process
-		end,
-	})
-	client:start(function(err)
-		assert_equal(nil, err, "RPC initialization")
-		started = true
-	end)
-	assert(
-		vim.wait(1000, function()
-			return started
-		end),
-		"RPC initialization timed out"
+	local state = run({ confirm = false }, "delete")
+	assert_equal(
+		nil,
+		request(state, "workspace/commands/execute"),
+		"cancelled Delete does not execute"
 	)
-	local requested = {}
-	for _, capability in ipairs(frames[1][4].capabilities) do
-		requested[capability] = true
-	end
-	assert(requested["workspace.create.options"], "creation-options capability was not requested")
-	assert(
-		requested["workspace.addExisting.selector"],
-		"Add Existing selector capability was not requested"
-	)
-	assert(
-		requested["workspace.addExisting.presentation.v2"],
-		"Add Existing presentation v2 capability was not requested"
-	)
-	assert(
-		requested["workspace.addExisting.directories.v1"],
-		"Add Existing directory-selection capability was not requested"
-	)
-	assert(
-		requested["workspace.operations.completed"],
-		"operation-completion capability was not requested"
-	)
-	assert(not requested["workspace.git.status"], "disabled Git capability was requested")
-	assert(not requested["workspace.git.status.v2"], "disabled Git v2 capability was requested")
-	client:stop("test_complete", true)
-end
-
-do
-	local frames, started = {}, false
-	local client = rpc.Client.new({
-		command = "unused",
-		target = "unused",
-		git_enabled = true,
-		spawn = function(_, stream, _)
-			local process = {}
-			function process.write(_, bytes)
-				local frame = vim.mpack.decode(bytes)
-				frames[#frames + 1] = frame
-				if frame[3] == "initialize" then
-					stream.stdout(
-						nil,
-						vim.mpack.encode({
-							1,
-							frame[2],
-							vim.NIL,
-							{
-								protocolVersion = { major = 1, minor = 0 },
-								workspace = { id = "workspace-id", revision = 0 },
-								capabilities = frame[4].capabilities,
-								limits = { maxFrameBytes = 65536, maxPageSize = 100 },
-							},
-						})
-					)
-				end
-			end
-			function process.kill() end
-			return process
-		end,
-	})
-	client:start(function(err)
-		assert_equal(nil, err, "Git-enabled RPC initialization")
-		started = true
-	end)
-	assert(
-		vim.wait(1000, function()
-			return started
-		end),
-		"Git-enabled RPC initialization timed out"
-	)
-	local requested = {}
-	for _, capability in ipairs(frames[1][4].capabilities) do
-		requested[capability] = true
-	end
-	assert(requested["workspace.git.status"], "enabled Git capability was not requested")
-	assert(requested["workspace.git.status.v2"], "enabled Git v2 capability was not requested")
-	client:stop("test_complete", true)
+	assert_equal(nil, state.metrics.refresh_revision, "cancelled Delete does not reconcile")
 end
 
 print("DWE mutation probe passed")

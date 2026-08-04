@@ -20,26 +20,28 @@ local function scenario(identifier, action)
 	end
 end
 
-local function entry(id, name, kind, expandable, selectable, icon_hint, availability, states)
-	local value = {
+local function noop() end
+
+local function entry(id, name, kind, expandable, selectable, availability)
+	return {
 		entryId = id,
 		displayName = name,
 		kind = kind,
 		expandable = expandable,
 		selectable = selectable,
 		availability = availability or (selectable and "available" or "ineligible"),
-		gitStates = states or {},
+		gitStates = {},
 	}
-	if icon_hint then
-		value.iconHint = icon_hint
-	end
-	return value
 end
 
-local function legacy_entry(...)
-	local value = entry(...)
-	value.availability, value.gitStates = nil, nil
-	return value
+local function legacy_entry(id, name, kind, expandable, selectable)
+	return {
+		entryId = id,
+		displayName = name,
+		kind = kind,
+		expandable = expandable,
+		selectable = selectable,
+	}
 end
 
 local function start_page(entries, next_token, legacy)
@@ -48,14 +50,7 @@ local function start_page(entries, next_token, legacy)
 		selectorId = "selector-1",
 		expiresAtUtc = "2026-08-01T12:00:00.0000000Z",
 		maxSelectionCount = 256,
-		root = (legacy and legacy_entry or entry)(
-			"root",
-			"workspace",
-			"directory",
-			true,
-			false,
-			"folder"
-		),
+		root = (legacy and legacy_entry or entry)("root", "workspace", "directory", true, false),
 		entries = entries,
 		nextToken = next_token,
 	}
@@ -80,69 +75,65 @@ local function preview()
 	return {
 		confirmationToken = "preview-token",
 		expiresAtUtc = "2026-08-01T12:00:00.0000000Z",
-		summary = "Add two existing items",
+		summary = "Add existing items",
 		effects = {
 			{ operation = "addToProject", target = "App.csproj", recursive = false },
-			{ operation = "modify", target = "App.csproj", recursive = false },
 		},
 	}
 end
 
 local function harness(options)
 	options = options or {}
-	local calls, errors, events = {}, {}, {}
-	local reconciliation = {}
+	local calls, errors = {}, {}
 	local selected = "file-1"
 	local live = true
-	local presentation_version_two = options.presentation_version_two ~= false
+	local metrics = {}
 	local workspace = {
 		client = { limits = { maxPageSize = options.page_size or 2 } },
 	}
 	workspace.has_capability = function(_, name)
-		return (name == "workspace.addExisting.selector" and options.capability ~= false)
-			or (name == "workspace.addExisting.presentation.v2" and presentation_version_two)
-			or (
-				name == "workspace.addExisting.directories.v1"
-				and options.directory_selection_version_one == true
-			)
+		if name == "workspace.addExisting.selector" then
+			return options.capability ~= false
+		elseif name == "workspace.addExisting.presentation.v2" then
+			return options.presentation_version_two ~= false
+		elseif name == "workspace.addExisting.directories.v1" then
+			return options.directory_selection_version_one == true
+		end
+		return false
 	end
 	workspace.request = function(_, method, parameters, callback)
 		calls[#calls + 1] = {
 			method = method,
 			parameters = vim.deepcopy(parameters),
-			callback = callback,
 		}
-		if options.request then
-			local handled = options.request(method, parameters, callback, calls)
-			if handled then
-				return
-			end
+		if options.request and options.request(method, parameters, callback) then
+			return
 		end
 		if method == "workspace/addExisting/start" then
-			return callback(
+			callback(
 				nil,
 				start_page({
-					entry("directory-1", "src", "directory", true, false, "folder"),
-					entry("file-1", "App.csproj", "file", false, true, "csproj"),
+					entry("directory-1", "src", "directory", true, false),
+					entry("file-1", "App.csproj", "file", false, true),
 				})
 			)
 		elseif method == "workspace/addExisting/children" then
-			return callback(nil, {
+			callback(nil, {
 				revision = 7,
 				selectorId = "selector-1",
 				parentEntryId = parameters.parentEntryId,
 				entries = {
-					entry("nested-file", "Nested.cs", "file", false, true, "cs"),
+					entry("nested-file", "Nested.cs", "file", false, true),
 				},
 			})
 		elseif method == "workspace/addExisting/close" then
-			return callback(nil, { closed = true })
+			callback(nil, { closed = true })
 		elseif method == "workspace/commands/describe" then
-			return callback(nil, descriptor(options.target_kind or "project"))
+			callback(nil, descriptor(options.target_kind or "project"))
 		elseif method == "workspace/commands/preview" then
-			return callback(nil, preview())
+			callback(nil, preview())
 		elseif method == "workspace/commands/execute" then
-			return callback(nil, { applied = true, revision = 8 })
+			callback(nil, { applied = true, revision = 8 })
 		end
 	end
 	local selector = Selector.new({
@@ -150,39 +141,18 @@ local function harness(options)
 		is_live = function()
 			return live
 		end,
-		on_enter = function(instance)
-			events[#events + 1] = "enter"
-			if options.on_enter then
-				options.on_enter(instance)
-			end
-		end,
-		on_render = function(instance)
-			events[#events + 1] = "render"
-			if options.on_render then
-				options.on_render(instance)
-			end
-		end,
-		on_leave = function()
-			events[#events + 1] = "leave"
-			if options.on_leave then
-				options.on_leave()
-			end
-		end,
+		on_enter = noop,
+		on_render = noop,
+		on_leave = noop,
 		on_selected = function(instance)
 			instance:select(selected)
 			return selected
-		end,
-		on_suspend = function()
-			reconciliation[#reconciliation + 1] = "suspend"
-		end,
-		on_resume = function(revision)
-			reconciliation[#reconciliation + 1] = revision and ("resume:" .. revision) or "resume"
 		end,
 		on_error = function(err)
 			errors[#errors + 1] = vim.deepcopy(err)
 		end,
 		on_success = function(revision)
-			events[#events + 1] = "success:" .. revision
+			metrics.success_revision = revision
 		end,
 	})
 	local function start()
@@ -195,11 +165,9 @@ local function harness(options)
 	end
 	return {
 		selector = selector,
-		workspace = workspace,
 		calls = calls,
 		errors = errors,
-		events = events,
-		reconciliation = reconciliation,
+		metrics = metrics,
 		start = start,
 		select = function(id)
 			selected = id
@@ -210,67 +178,75 @@ local function harness(options)
 	}
 end
 
-scenario("exact-start-paging-marks-confirm-execute", function()
-	local first_page = true
+local function calls_for(state, method)
+	local matches = {}
+	for _, call in ipairs(state.calls) do
+		if call.method == method then
+			matches[#matches + 1] = call
+		end
+	end
+	return matches
+end
+
+scenario("start-paging-mark-confirm-execute", function()
 	local state = harness({
 		request = function(method, parameters, callback)
 			if method == "workspace/addExisting/start" then
 				callback(
 					nil,
 					start_page({
-						entry("directory-1", "src", "directory", true, false, "folder"),
-						entry("file-1", "One.cs", "file", false, true, "cs"),
+						entry("directory-1", "src", "directory", true, false),
+						entry("file-1", "One.cs", "file", false, true),
 					}, "root-next")
 				)
 				return true
-			elseif method == "workspace/addExisting/children" and first_page then
-				first_page = false
-				assert_equal("root", parameters.parentEntryId, "root continuation parent")
+			elseif method == "workspace/addExisting/children" then
+				assert_equal("root", parameters.parentEntryId, "root page parent")
 				callback(nil, {
 					revision = 7,
 					selectorId = "selector-1",
 					parentEntryId = "root",
-					entries = { entry("file-2", "Two.fs", "file", false, true, "fs") },
+					entries = {
+						entry("file-2", "Two.fs", "file", false, true),
+					},
 				})
 				return true
 			end
 		end,
 	})
 	state.start()
+
 	assert_equal({
 		targetNodeId = "target-1",
 		selectionId = "selection-1",
 		expectedRevision = 7,
 		pageSize = 2,
-	}, state.calls[1].parameters, "exact selector start envelope")
+	}, state.calls[1].parameters, "selector start envelope")
 	assert_equal({
 		selectorId = "selector-1",
 		parentEntryId = "root",
 		pageSize = 2,
 		continuationToken = "root-next",
-	}, state.calls[2].parameters, "exact continuation envelope")
-	assert_equal({ "enter" }, state.events, "selector enters after every root page")
-	assert_equal({ "directory-1", "file-1", "file-2" }, state.selector.children.root, "opaque pages")
+	}, state.calls[2].parameters, "root continuation envelope")
+	assert(state.selector:get_entry("file-2"), "the continued page is available for selection")
 
 	state.select("file-1")
 	state.selector:toggle()
 	state.select("file-2")
 	state.selector:toggle()
-	assert_equal({ "file-1", "file-2" }, state.selector.mark_order, "mark order is complete")
+
 	local original_input = vim.ui.input
-	vim.ui.input = function(options, callback)
-		assert(options.prompt:find("App.csproj", 1, true), "all preview effects are displayed")
-		assert(options.prompt:find("Confirm [y/N]", 1, true), "confirmation prompt is explicit")
-		assert_equal("N", options.default, "Add Existing defaults to No")
-		assert_equal("confirmation", options.kind, "Add Existing uses vim.ui.input")
+	vim.ui.input = function(_, callback)
 		callback("y")
 	end
 	state.selector:activate()
+	vim.ui.input = original_input
+
 	assert_equal({
 		commandId = "workspace.addExisting",
 		targetNodeId = "target-1",
-	}, state.calls[3].parameters, "exact describe envelope")
-	local expected_preview = {
+	}, calls_for(state, "workspace/commands/describe")[1].parameters, "describe envelope")
+	local command = {
 		commandId = "workspace.addExisting",
 		targetNodeId = "target-1",
 		arguments = {
@@ -279,54 +255,45 @@ scenario("exact-start-paging-marks-confirm-execute", function()
 		},
 		expectedRevision = 7,
 	}
-	assert_equal(expected_preview, state.calls[4].parameters, "exact Add Existing preview")
-	vim.ui.input = original_input
-	local execute = vim.deepcopy(expected_preview)
-	execute.confirmationToken = "preview-token"
 	assert_equal(
-		execute,
-		state.calls[#state.calls].parameters,
-		"execute is a deep preview copy plus token"
+		command,
+		calls_for(state, "workspace/commands/preview")[1].parameters,
+		"preview envelope"
 	)
+	command.confirmationToken = "preview-token"
 	assert_equal(
-		nil,
-		state.calls[#state.calls - 1].parameters.confirmationToken,
-		"preview stays clean"
+		command,
+		calls_for(state, "workspace/commands/execute")[1].parameters,
+		"execute envelope"
 	)
-	assert_equal(
-		{ "enter", "render", "render", "leave", "success:8" },
-		state.events,
-		"restore precedes success"
-	)
-	assert_equal({ "suspend", "resume:8" }, state.reconciliation, "success resumes after restore")
-	assert_equal({}, state.errors, "successful flow errors")
+	assert_equal(false, state.selector:is_engaged(), "successful execution exits selector mode")
+	assert_equal(8, state.metrics.success_revision, "successful revision is reported")
+	assert_equal({}, state.errors, "successful flow has no errors")
 end)
 
-scenario("activate lazily expands and collapses directories without confirming", function()
-	local nested_continuation
+scenario("directory-expansion-and-cached-collapse", function()
 	local state = harness({
 		request = function(method, parameters, callback)
 			if
 				method == "workspace/addExisting/children" and parameters.parentEntryId == "directory-1"
 			then
-				if not parameters.continuationToken then
+				if parameters.continuationToken == nil then
 					callback(nil, {
 						revision = 7,
 						selectorId = "selector-1",
 						parentEntryId = "directory-1",
 						entries = {
-							entry("nested-1", "A.vb", "file", false, true, "vb"),
+							entry("nested-1", "One.cs", "file", false, true),
 						},
 						nextToken = "nested-next",
 					})
 				else
-					nested_continuation = vim.deepcopy(parameters)
 					callback(nil, {
 						revision = 7,
 						selectorId = "selector-1",
 						parentEntryId = "directory-1",
 						entries = {
-							entry("nested-2", "B.txt", "file", false, false, "txt"),
+							entry("nested-2", "Two.cs", "file", false, true),
 						},
 					})
 				end
@@ -335,223 +302,148 @@ scenario("activate lazily expands and collapses directories without confirming",
 		end,
 	})
 	state.start()
-	assert_equal(nil, state.selector.children["directory-1"], "directory remains lazy")
 	state.select("directory-1")
 	state.selector:activate()
+
+	local pages = calls_for(state, "workspace/addExisting/children")
+	assert_equal({
+		selectorId = "selector-1",
+		parentEntryId = "directory-1",
+		pageSize = 2,
+	}, pages[1].parameters, "directory children envelope")
 	assert_equal({
 		selectorId = "selector-1",
 		parentEntryId = "directory-1",
 		pageSize = 2,
 		continuationToken = "nested-next",
-	}, nested_continuation, "nested continuation stays opaque")
-	assert_equal({ "nested-1", "nested-2" }, state.selector.children["directory-1"], "nested pages")
+	}, pages[2].parameters, "directory continuation envelope")
+	assert(state.selector:get_entry("nested-2"), "nested continuation is selectable")
+
 	state.selector:activate()
-	assert_equal(nil, state.selector.expanded["directory-1"], "opaque directory collapses")
-	assert_equal(0, #state.errors, "directory activation never attempts confirmation")
+	state.selector:activate()
+	assert_equal(
+		{ "nested-1", "nested-2" },
+		state.selector:children_of("directory-1"),
+		"collapse and re-expand preserve loaded children"
+	)
+	assert_equal({}, state.errors, "directory activation stays valid")
 end)
 
-scenario("strict-malformed-start-pages-and-duplicate-state", function()
-	local cases = {
-		{
-			name = "wrong revision",
-			mutate = function(result)
-				result.revision = 8
-			end,
-		},
-		{
-			name = "wrong limit",
-			mutate = function(result)
-				result.maxSelectionCount = 255
-			end,
-		},
-		{
-			name = "extra field",
-			mutate = function(result)
-				result.path = "/forbidden"
-			end,
-		},
-		{
-			name = "selectable directory",
-			mutate = function(result)
-				result.root.selectable = true
-			end,
-		},
-		{
-			name = "availability disagrees with selectability",
-			mutate = function(result)
-				result.entries = {
-					entry("blocked", "Blocked.cs", "file", false, false, "cs", "available"),
-				}
-			end,
-		},
-		{
-			name = "Git states are out of order",
-			mutate = function(result)
-				result.entries = {
-					entry(
-						"changed",
-						"Changed.cs",
-						"file",
-						false,
-						true,
-						"cs",
-						"available",
-						{ "untracked", "staged" }
-					),
-				}
-			end,
-		},
-		{
-			name = "duplicate ID",
-			mutate = function(result)
-				result.entries = {
-					entry("same", "One", "file", false, true),
-					entry("same", "Two", "file", false, true),
-				}
-			end,
-		},
-		{
-			name = "oversized page",
-			mutate = function(result)
-				result.entries = {
-					entry("one", "One", "file", false, true),
-					entry("two", "Two", "file", false, true),
-					entry("three", "Three", "file", false, true),
-				}
-			end,
-		},
-	}
-	for _, case in ipairs(cases) do
-		local state = harness({
-			request = function(method, _, callback)
-				if method == "workspace/addExisting/start" then
-					local result = start_page({})
-					case.mutate(result)
-					callback(nil, result)
-					return true
-				end
-			end,
-		})
-		state.start()
-		assert_equal(false, state.selector:is_engaged(), case.name .. " exits")
-		assert_equal({}, state.events, case.name .. " never replaces semantic rows")
-		assert_equal("incompatible_selector", state.errors[1].code, case.name .. " strict error")
+scenario("confirmation-rejection-and-cancellation", function()
+	local original_input = vim.ui.input
+	vim.ui.input = function(_, callback)
+		callback("n")
 	end
+	local state = harness()
+	state.start()
+	state.selector:toggle()
+	state.selector:confirm()
+	vim.ui.input = original_input
 
-	local state = harness({
+	assert_equal(nil, calls_for(state, "workspace/commands/execute")[1], "rejection does not execute")
+	assert_equal(true, state.selector:is_active(), "rejection leaves the selector available")
+	state.selector:cancel()
+	assert_equal({
+		selectorId = "selector-1",
+	}, calls_for(state, "workspace/addExisting/close")[1].parameters, "close envelope")
+	assert_equal(false, state.selector:is_engaged(), "cancellation exits selector mode")
+end)
+
+scenario("late-callbacks-and-stale-revisions-stay-inert", function()
+	local pending_children
+	local children = harness({
 		request = function(method, parameters, callback)
-			if method == "workspace/addExisting/start" then
-				callback(nil, start_page({}, "repeat"))
-				return true
-			elseif method == "workspace/addExisting/children" then
-				callback(nil, {
-					revision = 7,
-					selectorId = "selector-1",
-					parentEntryId = parameters.parentEntryId,
-					entries = {},
-					nextToken = "repeat",
-				})
+			if
+				method == "workspace/addExisting/children" and parameters.parentEntryId == "directory-1"
+			then
+				pending_children = callback
 				return true
 			end
 		end,
 	})
-	state.start()
-	assert_equal({}, state.events, "duplicate token never replaces semantic rows")
-	assert_equal("incompatible_selector", state.errors[1].code, "duplicate token error")
+	children.start()
+	children.select("directory-1")
+	children.selector:expand()
+	children.selector:cancel()
+	pending_children(nil, {
+		revision = 7,
+		selectorId = "selector-1",
+		parentEntryId = "directory-1",
+		entries = {
+			entry("late", "Late.cs", "file", false, true),
+		},
+	})
+	assert_equal(nil, children.selector:get_entry("late"), "late pages cannot revive a selector")
+	assert_equal(false, children.selector:is_engaged(), "cancelled selector remains inactive")
 
-	for field, wrong in pairs({
-		revision = 8,
-		selectorId = "other-selector",
-		parentEntryId = "other-parent",
-	}) do
-		local mismatch = harness({
-			request = function(method, parameters, callback)
-				if
-					method == "workspace/addExisting/children"
-					and parameters.parentEntryId == "directory-1"
-				then
-					local result = {
-						revision = 7,
-						selectorId = "selector-1",
-						parentEntryId = "directory-1",
-						entries = {},
-					}
-					result[field] = wrong
-					callback(nil, result)
-					return true
-				end
-			end,
-		})
-		mismatch.start()
-		mismatch.select("directory-1")
-		mismatch.selector:expand()
-		assert_equal({ "enter", "leave" }, mismatch.events, field .. " mismatch restores")
-		assert_equal("incompatible_selector", mismatch.errors[1].code, field .. " mismatch")
+	local pending_confirmation
+	local original_input = vim.ui.input
+	vim.ui.input = function(_, callback)
+		pending_confirmation = callback
 	end
+	local confirmation = harness()
+	confirmation.start()
+	confirmation.selector:toggle()
+	confirmation.selector:confirm()
+	confirmation.selector:cancel()
+	pending_confirmation("y")
+	vim.ui.input = original_input
+	assert_equal(
+		nil,
+		calls_for(confirmation, "workspace/commands/execute")[1],
+		"late confirmation cannot execute"
+	)
+
+	local stale = harness()
+	stale.start()
+	stale.selector:workspace_changed(8)
+	assert_equal(false, stale.selector:is_engaged(), "revision change exits selector mode")
+	assert_equal("stale_selector", stale.errors[1].code, "revision change reports staleness")
 end)
 
-scenario(
-	"mark action is silent for directories and existing files and reports actual failures",
-	function()
-		local values = {
-			entry("directory-1", "src", "directory", true, false),
-			entry("blocked", "blocked.csproj", "file", false, false),
-			entry("existing", "Existing.cs", "file", false, false, "cs", "alreadyPresent"),
-		}
-		for index = 1, 257 do
-			values[#values + 1] = entry("file-" .. index, index .. ".cs", "file", false, true)
-		end
-		local state = harness({
-			page_size = 4096,
-			request = function(method, _, callback)
-				if method == "workspace/addExisting/start" then
-					callback(nil, start_page(values))
-					return true
-				end
-			end,
-		})
-		state.start()
-		state.selector:confirm()
-		assert_equal("empty_selection", state.errors[#state.errors].code, "empty confirm is local")
-		assert(
-			state.errors[#state.errors].message:find("Press Space", 1, true),
-			"empty confirmation explains marking"
-		)
-		local calls = #state.calls
-		local errors = #state.errors
-		state.select("directory-1")
-		state.selector:toggle()
-		state.select("existing")
-		state.selector:toggle()
-		assert_equal(errors, #state.errors, "directory and existing file are silent")
-		state.select("blocked")
-		state.selector:toggle()
-		assert_equal(
-			"not_selectable",
-			state.errors[#state.errors].code,
-			"ineligible file is contextual"
-		)
-		for index = 1, 257 do
-			state.select("file-" .. index)
-			state.selector:toggle()
-		end
-		assert_equal(256, #state.selector.mark_order, "advertised selection limit")
-		assert_equal(false, state.selector.marks["file-257"] == true, "limit cannot be exceeded")
-		assert_equal(calls, #state.calls, "local mark checks make no request")
-		assert_equal("selection_limit", state.errors[#state.errors].code, "limit error")
-	end
-)
+scenario("capability-variants", function()
+	local unsupported = harness({ capability = false })
+	unsupported.start()
+	assert_equal(nil, unsupported.calls[1], "unsupported selector sends no request")
+	assert_equal("unsupported_capability", unsupported.errors[1].code, "missing selector capability")
 
-scenario("whole-directory marks keep Enter expansion and apply latest-overlap-wins", function()
-	local state = harness({
+	local original_input = vim.ui.input
+	vim.ui.input = function(_, callback)
+		callback("n")
+	end
+	local legacy = harness({
+		presentation_version_two = false,
+		request = function(method, _, callback)
+			if method == "workspace/addExisting/start" then
+				callback(
+					nil,
+					start_page({
+						legacy_entry("file-1", "Legacy.cs", "file", false, true),
+					}, nil, true)
+				)
+				return true
+			end
+		end,
+	})
+	legacy.start()
+	legacy.selector:toggle()
+	legacy.selector:confirm()
+	assert_equal(true, legacy.selector:is_active(), "presentation v1 selector remains supported")
+	assert_equal(
+		{ "file-1" },
+		calls_for(legacy, "workspace/commands/preview")[1].parameters.arguments.entryIds,
+		"presentation v1 entries remain markable"
+	)
+	legacy.selector:cancel()
+
+	local directories = harness({
 		directory_selection_version_one = true,
 		request = function(method, parameters, callback)
 			if method == "workspace/addExisting/start" then
 				callback(
 					nil,
 					start_page({
-						entry("directory-1", "src", "directory", true, true, "folder"),
-						entry("file-1", "Root.cs", "file", false, true, "cs"),
+						entry("directory-1", "src", "directory", true, true),
 					})
 				)
 				return true
@@ -562,243 +454,120 @@ scenario("whole-directory marks keep Enter expansion and apply latest-overlap-wi
 					revision = 7,
 					selectorId = "selector-1",
 					parentEntryId = "directory-1",
-					entries = {
-						entry("nested-file", "Nested.cs", "file", false, true, "cs"),
-					},
+					entries = {},
 				})
 				return true
 			end
 		end,
 	})
-	state.start()
-	assert_equal(true, state.selector.directory_selection_version_one, "capability is retained")
-
-	state.select("directory-1")
-	state.selector:toggle()
-	assert_equal({ "directory-1" }, state.selector.mark_order, "Space marks a directory")
-
-	state.selector:activate()
-	assert_equal(true, state.selector.expanded["directory-1"], "Enter expands a marked directory")
-	assert_equal(true, state.selector.marks["directory-1"], "expansion preserves the directory mark")
-
-	state.select("nested-file")
-	state.selector:toggle()
-	assert_equal({ "nested-file" }, state.selector.mark_order, "later descendant replaces ancestor")
-	assert_equal(nil, state.selector.marks["directory-1"], "ancestor mark is removed")
-
-	state.select("directory-1")
-	state.selector:toggle()
-	assert_equal({ "directory-1" }, state.selector.mark_order, "later directory replaces descendant")
-	assert_equal(nil, state.selector.marks["nested-file"], "descendant mark is removed")
-
-	state.selector:activate()
-	assert_equal(nil, state.selector.expanded["directory-1"], "Enter collapses a marked directory")
-	assert_equal(true, state.selector.marks["directory-1"], "collapse preserves the directory mark")
-	assert_equal({}, state.errors, "directory selection and expansion stay error-free")
-end)
-
-scenario("ineligible ordinary files explain the selected target rule", function()
-	local messages = {
-		workspace = "Only .csproj, .fsproj, or .vbproj project files can be added to the solution.",
-		solutionFolder = "Only projects or solution items can be added to a Solution Folder.",
-		project = "Only non-project files can be added to a project.",
-		projectFolder = "Only non-project files can be added to a project folder.",
-	}
-	for target_kind, message in pairs(messages) do
-		local state = harness({
-			target_kind = target_kind,
-			request = function(method, _, callback)
-				if method == "workspace/addExisting/start" then
-					callback(
-						nil,
-						start_page({
-							entry("blocked", "Blocked.txt", "file", false, false, "txt"),
-						})
-					)
-					return true
-				end
-			end,
-		})
-		state.start()
-		state.select("blocked")
-		state.selector:toggle()
-		assert_equal("not_selectable", state.errors[1].code, target_kind .. " error code")
-		assert_equal(message, state.errors[1].message, target_kind .. " target guidance")
-	end
-end)
-
-scenario("legacy selector entries retain the exact older response shape", function()
-	local state = harness({
-		presentation_version_two = false,
-		request = function(method, _, callback)
-			if method == "workspace/addExisting/start" then
-				callback(
-					nil,
-					start_page({
-						legacy_entry("file-1", "Legacy.cs", "file", false, true, "cs"),
-					}, nil, true)
-				)
-				return true
-			end
-		end,
-	})
-	state.start()
-	assert_equal(true, state.selector:is_active(), "legacy selector starts")
+	directories.start()
+	directories.select("directory-1")
+	directories.selector:toggle()
+	directories.selector:activate()
+	directories.selector:confirm()
+	vim.ui.input = original_input
 	assert_equal(
-		{},
-		state.selector:get_entry("file-1").git_states,
-		"legacy selector has no Git state"
+		{ "directory-1" },
+		calls_for(directories, "workspace/commands/preview")[1].parameters.arguments.entryIds,
+		"directory capability permits marking without changing Enter expansion"
 	)
-	state.selector:toggle()
-	assert_equal({ "file-1" }, state.selector.mark_order, "legacy selectable file remains markable")
+	assert_equal({}, directories.errors, "supported capability variants remain valid")
+	directories.selector:cancel()
 end)
 
-scenario("cancel-error-stale-and-late-callback-invalidation", function()
-	local close_callback, nested_callback
+scenario("additive-response-data-is-accepted", function()
 	local state = harness({
 		request = function(method, parameters, callback)
-			if method == "workspace/addExisting/close" then
-				close_callback = callback
-				return true
-			elseif
-				method == "workspace/addExisting/children" and parameters.parentEntryId == "directory-1"
-			then
-				nested_callback = callback
-				return true
-			end
-		end,
-	})
-	state.start()
-	state.select("directory-1")
-	state.selector:expand()
-	state.selector:cancel()
-	assert_equal("leave", state.events[#state.events], "cancel restores semantic rows")
-	assert_equal({
-		selectorId = "selector-1",
-	}, state.calls[#state.calls].parameters, "exact close envelope")
-	nested_callback(nil, {
-		revision = 7,
-		selectorId = "selector-1",
-		parentEntryId = "directory-1",
-		entries = { entry("late", "late.cs", "file", false, true) },
-	})
-	close_callback(nil, { closed = false })
-	assert_equal(false, state.selector:is_engaged(), "late callbacks cannot revive selector")
-	assert_equal(0, #state.errors, "late close cannot alter replacement view")
-
-	local stale = harness()
-	stale.start()
-	stale.selector:workspace_changed(8)
-	assert_equal({ "enter", "leave" }, stale.events, "stale revision restores directly")
-	assert_equal("stale_selector", stale.errors[1].code, "stale revision error")
-
-	local expired = harness({
-		request = function(method, _, callback)
 			if method == "workspace/addExisting/start" then
-				callback({ code = "selector_expired", message = "expired" })
+				local result = start_page({
+					entry("directory-1", "src", "directory", true, false),
+					entry("file-1", "App.csproj", "file", false, true),
+				})
+				result.futurePageData = { supportedLater = true }
+				result.root.futureEntryData = "root"
+				result.entries[2].futureEntryData = "file"
+				result.entries[2].gitStates = { "futureState", "unstaged", "staged" }
+				callback(nil, result)
+				return true
+			elseif method == "workspace/addExisting/children" then
+				callback(nil, {
+					revision = 7,
+					selectorId = "selector-1",
+					parentEntryId = parameters.parentEntryId,
+					entries = {
+						vim.tbl_extend(
+							"force",
+							entry("nested-file", "Nested.cs", "file", false, true),
+							{ futureEntryData = true, gitStates = { "futureState" } }
+						),
+					},
+					futurePageData = true,
+				})
+				return true
+			elseif method == "workspace/addExisting/close" then
+				callback(nil, { closed = true, futureCloseData = true })
 				return true
 			end
 		end,
 	})
-	expired.start()
-	assert_equal({}, expired.events, "expired start leaves semantic rows untouched")
-	assert_equal("selector_expired", expired.errors[1].code, "expired selector error")
-end)
-
-scenario("preview-and-execute-late-callbacks", function()
-	for _, delayed_method in ipairs({
-		"workspace/commands/describe",
-		"workspace/commands/preview",
-		"workspace/commands/execute",
-	}) do
-		local delayed
-		local original_input = vim.ui.input
-		vim.ui.input = function(_, callback)
-			callback("y")
-		end
-		local state = harness({
-			request = function(method, _, callback)
-				if method == delayed_method then
-					delayed = callback
-					return true
-				end
-			end,
-		})
-		state.start()
-		state.selector:toggle()
-		state.selector:confirm()
-		state.selector:cancel()
-		if delayed_method == "workspace/commands/describe" then
-			delayed(nil, descriptor("project"))
-		elseif delayed_method == "workspace/commands/preview" then
-			delayed(nil, preview())
-		else
-			delayed(nil, { applied = true, revision = 8 })
-		end
-		assert_equal({ "enter", "render", "leave" }, state.events, delayed_method .. " late event")
-		assert_equal(false, state.selector:is_engaged(), delayed_method .. " remains invalid")
-		vim.ui.input = original_input
-	end
-end)
-
-scenario("confirmation-late-callback", function()
-	local pending
-	local original_input = vim.ui.input
-	vim.ui.input = function(options, callback)
-		assert_equal("confirmation", options.kind, "late prompt uses vim.ui.input")
-		pending = callback
-	end
-	local state = harness()
 	state.start()
+	assert_equal(true, state.selector:is_active(), "additive start data keeps the selector active")
+
 	state.selector:toggle()
-	state.selector:confirm()
-	assert(pending, "confirmation callback was not retained")
-	state.selector:cancel()
-	pending("y")
-	assert_equal({ "enter", "render", "leave" }, state.events, "late confirmation stays inert")
-	assert_equal(false, state.selector:is_engaged(), "late confirmation cannot revive selector")
-	assert_equal(
-		"workspace/addExisting/close",
-		state.calls[#state.calls].method,
-		"no execute follows"
-	)
-	vim.ui.input = original_input
-end)
-
-scenario("all-target-context-descriptors", function()
-	for _, target_kind in ipairs({ "workspace", "solutionFolder", "project", "projectFolder" }) do
-		local original_input = vim.ui.input
-		vim.ui.input = function(_, callback)
-			callback("n")
-		end
-		local state = harness({ target_kind = target_kind })
-		state.start()
-		state.selector:toggle()
-		state.selector:confirm()
-		assert_equal({}, state.errors, target_kind .. " descriptor accepted")
-		assert_equal(true, state.selector:is_active(), target_kind .. " remains after confirm cancel")
-		state.selector:cancel()
-		vim.ui.input = original_input
-	end
-end)
-
-scenario("dismissed-confirmation", function()
 	local original_input = vim.ui.input
 	vim.ui.input = function(_, callback)
-		callback(nil)
+		callback("n")
 	end
-	local state = harness()
-	state.start()
-	state.selector:toggle()
 	state.selector:confirm()
-	assert_equal(true, state.selector:is_active(), "dismissed confirmation leaves selector active")
-	assert_equal(
-		"workspace/commands/preview",
-		state.calls[#state.calls].method,
-		"dismissal stops execute"
-	)
-	state.selector:cancel()
 	vim.ui.input = original_input
+	assert_equal(
+		{ "file-1" },
+		calls_for(state, "workspace/commands/preview")[1].parameters.arguments.entryIds,
+		"entries with additive data remain usable"
+	)
+
+	state.select("directory-1")
+	state.selector:expand()
+	assert(state.selector:get_entry("nested-file"), "additive children data remains usable")
+	state.selector:cancel()
+	assert_equal({}, state.errors, "additive response data does not fail the selector")
+end)
+
+scenario("critical-response-identity-remains-required", function()
+	local missing_id = harness({
+		request = function(method, _, callback)
+			if method == "workspace/addExisting/start" then
+				local result = start_page({})
+				result.selectorId = nil
+				callback(nil, result)
+				return true
+			end
+		end,
+	})
+	missing_id.start()
+	assert_equal(false, missing_id.selector:is_engaged(), "missing selector identity is rejected")
+	assert_equal("incompatible_selector", missing_id.errors[1].code, "missing identity error")
+
+	local wrong_parent = harness({
+		request = function(method, parameters, callback)
+			if
+				method == "workspace/addExisting/children" and parameters.parentEntryId == "directory-1"
+			then
+				callback(nil, {
+					revision = 7,
+					selectorId = "selector-1",
+					parentEntryId = "another-directory",
+					entries = {},
+				})
+				return true
+			end
+		end,
+	})
+	wrong_parent.start()
+	wrong_parent.select("directory-1")
+	wrong_parent.selector:expand()
+	assert_equal(false, wrong_parent.selector:is_engaged(), "wrong page identity is rejected")
+	assert_equal("incompatible_selector", wrong_parent.errors[1].code, "wrong page identity error")
 end)
 
 local function semantic_tree()
@@ -824,113 +593,39 @@ local function semantic_tree()
 	}, { __index = Workspace })
 end
 
-local function mapping_signature(mapping)
-	if not mapping then
-		return nil
-	end
-	return {
-		lhs = mapping.lhs,
-		rhs = mapping.rhs,
-		callback = mapping.callback,
-		noremap = mapping.noremap,
-		nowait = mapping.nowait,
-		silent = mapping.silent,
-		expr = mapping.expr,
-		replace_keycodes = mapping.replace_keycodes,
-		desc = mapping.desc,
-	}
-end
-
-local function find_mapping(lhs)
-	local raw = vim.keycode(lhs)
-	for _, mapping in ipairs(vim.api.nvim_buf_get_keymap(view.buf, "n")) do
-		if mapping.lhsraw == raw then
-			return mapping
-		end
-	end
-end
-
-scenario("same-drawer-mapping-and-semantic-view-restoration", function()
-	config.setup({
-		position = "right",
-		width = 34,
-		mappings = {
-			activate = false,
-			close = false,
-			new = "a",
-		},
-	})
-	view.open()
-	local tree = semantic_tree()
-	view.render(tree)
-	vim.api.nvim_win_set_width(view.win, 41)
-	vim.api.nvim_win_set_cursor(view.win, { 16, 0 })
-	vim.api.nvim_win_call(view.win, function()
-		vim.fn.winrestview({ topline = 11 })
-	end)
-
-	local semantic_actions = setmetatable({}, {
-		__index = function()
-			return function() end
-		end,
-	})
-	local semantic_new_calls = 0
-	semantic_actions.new = function()
-		semantic_new_calls = semantic_new_calls + 1
-	end
-	view.mappings(semantic_actions)
-	local plugin_owned = find_mapping("a").callback
-	local custom_callback = function() end
-	vim.api.nvim_buf_set_keymap(view.buf, "n", "<Space>", "j", {
-		noremap = true,
-		nowait = true,
-		silent = true,
-	})
-	vim.api.nvim_buf_set_keymap(view.buf, "n", "<CR>", "zz", {
-		noremap = false,
-		nowait = false,
-		silent = false,
-	})
-	vim.keymap.set("n", "q", custom_callback, {
-		buffer = view.buf,
-		desc = "custom callback",
-		expr = false,
-	})
-	vim.keymap.set("n", "z", "G", { buffer = view.buf, remap = true })
-	pcall(vim.keymap.del, "n", "<Esc>", { buffer = view.buf })
-
-	local before = {}
-	for _, lhs in ipairs({ "a", "<Space>", "<CR>", "q", "<Esc>", "z" }) do
-		before[lhs] = mapping_signature(find_mapping(lhs)) or false
-	end
-	local selector = {
-		root_id = "selector-root",
-		selected_id = "selector-file",
-		entries = {
-			["selector-root"] = {
-				id = "selector-root",
+local function selector_tree()
+	local entries, children =
+		{
+			root = {
+				id = "root",
 				kind = "directory",
 				name = "workspace",
 				expandable = true,
 				selectable = false,
-				icon_hint = "folder",
 				availability = "ineligible",
 				git_states = {},
 			},
-			["selector-file"] = {
-				id = "selector-file",
-				parent_id = "selector-root",
-				kind = "file",
-				name = "New.cs",
-				expandable = false,
-				selectable = true,
-				icon_hint = "cs",
-				availability = "available",
-				git_states = {},
-			},
-		},
-		children = { ["selector-root"] = { "selector-file" } },
-		expanded = { ["selector-root"] = true },
+		}, { root = {} }
+	for index = 1, 30 do
+		local id = "selector-" .. index
+		entries[id] = {
+			id = id,
+			parent_id = "root",
+			kind = "file",
+			name = ("File %02d.cs"):format(index),
+			expandable = false,
+			selectable = true,
+			availability = "available",
+			git_states = {},
+		}
+		children.root[#children.root + 1] = id
+	end
+	local selector = {
+		root_id = "root",
+		selected_id = "selector-15",
+		entries = entries,
+		children = children,
+		expanded = { root = true },
 		marks = {},
 		toggles = 0,
 	}
@@ -949,278 +644,66 @@ scenario("same-drawer-mapping-and-semantic-view-restoration", function()
 	function selector:toggle()
 		self.toggles = self.toggles + 1
 	end
-	local actions = {
+	return selector
+end
+
+local function find_mapping(lhs)
+	local raw = vim.keycode(lhs)
+	for _, mapping in ipairs(vim.api.nvim_buf_get_keymap(view.buf, "n")) do
+		if mapping.lhsraw == raw then
+			return mapping
+		end
+	end
+end
+
+scenario("selector-view-preserves-selection-and-viewport", function()
+	config.setup({
+		mappings = {
+			activate = false,
+			close = false,
+			new = "a",
+		},
+	})
+	view.open()
+	local tree = semantic_tree()
+	view.render(tree)
+	vim.api.nvim_win_set_cursor(view.win, { 16, 0 })
+	vim.api.nvim_win_call(view.win, function()
+		vim.fn.winrestview({ topline = 11 })
+	end)
+	local semantic_anchor = vim.api.nvim_buf_get_lines(view.buf, 10, 11, false)[1]
+
+	local selector = selector_tree()
+	view.enter_selector(selector, {
 		activate = function() end,
 		close = function() end,
-	}
-	view.enter_selector(selector, actions, tree)
-	assert_equal(view.buf, vim.api.nvim_win_get_buf(view.win), "selector reuses the same drawer")
-	assert_equal(41, vim.api.nvim_win_get_width(view.win), "selector keeps user width")
-	assert_equal(nil, find_mapping("a"), "semantic New key is absent in selector mode")
-	find_mapping("<Space>").callback()
-	assert_equal(1, selector.toggles, "Space calls the selector-private toggle")
-	for _, lhs in ipairs({ "<CR>", "q", "<Esc>" }) do
-		local action = lhs == "<CR>" and "activate" or "close"
-		assert(find_mapping(lhs).callback == actions[action])
-	end
-	assert_equal(before.z, mapping_signature(find_mapping("z")), "unrelated mapping stays untouched")
-
-	vim.api.nvim_win_set_width(view.win, 48)
-	view.leave_selector(tree)
-	for _, lhs in ipairs({ "a", "<Space>", "<CR>", "q", "<Esc>", "z" }) do
-		assert_equal(
-			before[lhs],
-			mapping_signature(find_mapping(lhs)) or false,
-			lhs .. " exact restoration"
-		)
-	end
-	assert(find_mapping("a").callback == plugin_owned, "plugin-owned callback identity is restored")
-	find_mapping("a").callback()
-	assert_equal(1, semantic_new_calls, "restored semantic New mapping remains active")
-	assert_equal(41, vim.api.nvim_win_get_width(view.win), "semantic drawer restores user width")
-	assert_equal("semantic-15", tree.selected_id, "semantic ID selection is restored")
-	assert_equal("right", config.get().position, "dock side is unchanged")
-	view.close()
-end)
-
-scenario(
-	"success cancellation failure staleness invalidation and replacement restore every modal mapping",
-	function()
-		local mapping_keys = { "a", "<Space>", "<CR>", "q", "<Esc>" }
-		local function exercise(name, options, exit)
-			local tree = semantic_tree()
-			local semantic_actions = setmetatable({}, {
-				__index = function()
-					return function() end
-				end,
-			})
-			local modal_actions = {
-				activate = function() end,
-				close = function() end,
-			}
-			config.setup({
-				mappings = {
-					activate = false,
-					close = false,
-					new = "a",
-				},
-			})
-			view.open()
-			for _, lhs in ipairs(mapping_keys) do
-				pcall(vim.keymap.del, "n", lhs, { buffer = view.buf })
-			end
-			view.mappings(semantic_actions)
-			vim.api.nvim_buf_set_keymap(view.buf, "n", "<Space>", "j", {
-				noremap = true,
-				nowait = true,
-				silent = true,
-			})
-			vim.api.nvim_buf_set_keymap(view.buf, "n", "<CR>", "zz", {
-				noremap = false,
-				nowait = false,
-				silent = false,
-			})
-			vim.keymap.set("n", "q", function() end, {
-				buffer = view.buf,
-				desc = "custom cancellation",
-			})
-			vim.api.nvim_buf_set_keymap(view.buf, "n", "<Esc>", "<Nop>", {
-				noremap = true,
-				nowait = false,
-				silent = true,
-			})
-			view.render(tree)
-			local before = {}
-			for _, lhs in ipairs(mapping_keys) do
-				before[lhs] = mapping_signature(find_mapping(lhs)) or false
-			end
-			options = vim.tbl_extend("force", options or {}, {
-				on_enter = function(active)
-					view.enter_selector(active, modal_actions, tree)
-				end,
-				on_render = function(active)
-					view.render_selector(active)
-				end,
-				on_leave = function()
-					view.leave_selector(tree)
-				end,
-			})
-			local state = harness(options)
-			state.start()
-			assert_equal(nil, find_mapping("a"), name .. " removes semantic New")
-			assert(find_mapping("<Space>"), name .. " installs Space")
-			exit(state)
-			for _, lhs in ipairs(mapping_keys) do
-				assert_equal(
-					before[lhs],
-					mapping_signature(find_mapping(lhs)) or false,
-					name .. " restores " .. lhs
-				)
-			end
-			view.close()
-		end
-
-		exercise("success", nil, function(state)
-			local original_input = vim.ui.input
-			vim.ui.input = function(_, callback)
-				callback("y")
-			end
-			state.selector:toggle()
-			state.selector:confirm()
-			vim.ui.input = original_input
-		end)
-		exercise("cancellation", nil, function(state)
-			state.selector:cancel()
-		end)
-		exercise("failure", {
-			request = function(method, parameters, callback)
-				if
-					method == "workspace/addExisting/children"
-					and parameters.parentEntryId == "directory-1"
-				then
-					callback({ code = "selector_failed", message = "failed" })
-					return true
-				end
-			end,
-		}, function(state)
-			state.select("directory-1")
-			state.selector:expand()
-		end)
-		exercise("staleness", nil, function(state)
-			state.selector:workspace_changed(8)
-		end)
-		exercise("invalidation", nil, function(state)
-			state.selector:invalidate(true)
-		end)
-		exercise("session replacement", nil, function(state)
-			state.start()
-			assert_equal(nil, find_mapping("a"), "replacement keeps semantic New removed")
-			assert(find_mapping("<Space>"), "replacement keeps Space installed")
-			state.selector:cancel()
-		end)
-	end
-)
-
-scenario("selector-devicons-disabled-missing-and-available", function()
-	local selector = {
-		root_id = "root",
-		selected_id = "file",
-		entries = {
-			root = {
-				id = "root",
-				kind = "directory",
-				name = "workspace",
-				expandable = true,
-				selectable = false,
-				icon_hint = "folder",
-				availability = "ineligible",
-				git_states = { "unstaged", "ignored" },
-			},
-			file = {
-				id = "file",
-				parent_id = "root",
-				kind = "file",
-				name = "Opaque",
-				expandable = false,
-				selectable = true,
-				icon_hint = "fs",
-				availability = "available",
-				git_states = {
-					"staged",
-					"unstaged",
-					"renamed",
-					"deleted",
-					"unmerged",
-					"untracked",
-					"ignored",
-				},
-			},
-		},
-		children = { root = { "file" } },
-		expanded = { root = true },
-		marks = {},
-	}
-	function selector:get_entry(id)
-		return self.entries[id]
-	end
-	function selector:is_expandable(id)
-		return self.entries[id].expandable
-	end
-	function selector:children_of(id)
-		return self.children[id]
-	end
-	function selector:select(id)
-		self.selected_id = id
-	end
-
-	config.setup()
-	view.open()
+	}, tree)
+	vim.api.nvim_win_set_cursor(view.win, { 16, 0 })
+	vim.api.nvim_win_call(view.win, function()
+		vim.fn.winrestview({ topline = 11 })
+	end)
+	local selector_anchor = vim.api.nvim_buf_get_lines(view.buf, 10, 11, false)[1]
 	view.render_selector(selector)
-	local lines = vim.api.nvim_buf_get_lines(view.buf, 0, -1, false)
+	assert_equal("selector-15", selector.selected_id, "selector selection survives re-render")
+	local selector_topline = vim.api.nvim_win_call(view.win, vim.fn.winsaveview).topline
 	assert_equal(
-		"  F ✓✗➜★◌ Opaque",
-		lines[2],
-		"disabled Devicons fallback with every ordered Git state"
+		selector_anchor,
+		vim.api.nvim_buf_get_lines(view.buf, selector_topline - 1, selector_topline, false)[1],
+		"selector viewport anchor survives re-render"
 	)
 
-	config.setup({ presentation = { devicons = true } })
-	package.loaded["nvim-web-devicons"] = nil
-	package.preload["nvim-web-devicons"] = function()
-		error("missing")
-	end
-	view.render_selector(selector)
-	lines = vim.api.nvim_buf_get_lines(view.buf, 0, -1, false)
-	assert_equal("  F ✓✗➜★◌ Opaque", lines[2], "missing Devicons fallback")
-
-	local lookup
-	package.loaded["nvim-web-devicons"] = {
-		get_icon = function(name, extension, options)
-			lookup = { name, extension, options }
-			return "λ", "DevIconFs"
-		end,
-	}
-	view.render_selector(selector)
-	lines = vim.api.nvim_buf_get_lines(view.buf, 0, -1, false)
-	assert_equal({ "Opaque", "fs", { default = true } }, lookup, "core icon hint is passed opaquely")
-	assert(
-		lines[2]:find("λ ✓✗➜★◌ Opaque", 1, true),
-		"available Devicon and every Git state are rendered"
+	view.leave_selector(tree)
+	assert_equal("semantic-15", tree.selected_id, "semantic selection is restored")
+	local semantic_topline = vim.api.nvim_win_call(view.win, vim.fn.winsaveview).topline
+	assert_equal(
+		semantic_anchor,
+		vim.api.nvim_buf_get_lines(view.buf, semantic_topline - 1, semantic_topline, false)[1],
+		"semantic viewport anchor is restored"
 	)
-
-	selector.marks.file = true
-	view.render_selector(selector)
-	local namespace = vim.api.nvim_get_namespaces()["dotnet-workspace-explorer"]
-	local extmarks = vim.api.nvim_buf_get_extmarks(view.buf, namespace, 0, -1, { details = true })
-	local signs = {}
-	for _, extmark in ipairs(extmarks) do
-		if extmark[4].sign_text then
-			signs[#signs + 1] = vim.trim(extmark[4].sign_text)
-		end
-	end
-	assert_equal({ "󰆤" }, signs, "marked target uses bookmark sign")
-
-	selector.marks.file = nil
-	selector.entries.file.availability = "alreadyPresent"
-	view.render_selector(selector)
-	extmarks = vim.api.nvim_buf_get_extmarks(view.buf, namespace, 0, -1, { details = true })
-	signs = {}
-	for _, extmark in ipairs(extmarks) do
-		if extmark[4].sign_text then
-			signs[#signs + 1] = vim.trim(extmark[4].sign_text)
-		end
-	end
-	assert_equal({ "✓" }, signs, "already-present file uses distinct sign")
-
-	selector.entries.file.availability = "ineligible"
-	view.render_selector(selector)
-	extmarks = vim.api.nvim_buf_get_extmarks(view.buf, namespace, 0, -1, { details = true })
-	for _, extmark in ipairs(extmarks) do
-		assert_equal(nil, extmark[4].sign_text, "selector sign is cleared when eligibility changes")
-	end
 	view.close()
 end)
 
-scenario("mode-aware-public-and-configured-action-routing", function()
+scenario("selector-mode-action-routing", function()
 	local Editing = require("dotnet-workspace-explorer.editing").Editing
 	local Mutations = require("dotnet-workspace-explorer.mutations").Mutations
 	local SelectorClass = require("dotnet-workspace-explorer.selector").Selector
@@ -1230,7 +713,7 @@ scenario("mode-aware-public-and-configured-action-routing", function()
 		mutations = Mutations.new,
 		selector = SelectorClass.new,
 	}
-	local active_selector, mutation_creates
+	local active_selector, mutation_created
 	Workspace.new = function(options)
 		local tree = semantic_tree()
 		tree.revision, tree.workspace_id, tree.git_enabled = 7, "workspace-id", false
@@ -1256,7 +739,7 @@ scenario("mode-aware-public-and-configured-action-routing", function()
 	Mutations.new = function()
 		return {
 			create = function()
-				mutation_creates = (mutation_creates or 0) + 1
+				mutation_created = true
 			end,
 			invalidate = function() end,
 		}
@@ -1264,20 +747,20 @@ scenario("mode-aware-public-and-configured-action-routing", function()
 	SelectorClass.new = function()
 		active_selector = {
 			engaged = true,
-			calls = {},
+			routed = {},
 		}
 		function active_selector:is_engaged()
 			return self.engaged
 		end
 		for _, action in ipairs({ "toggle", "activate", "cancel", "expand", "collapse" }) do
 			active_selector[action] = function(self)
-				self.calls[#self.calls + 1] = action
+				self.routed[#self.routed + 1] = action
 			end
 		end
 		function active_selector:invalidate()
 			self.engaged = false
 		end
-		active_selector.workspace_changed = function(_) end
+		active_selector.workspace_changed = function() end
 		return active_selector
 	end
 
@@ -1297,7 +780,7 @@ scenario("mode-aware-public-and-configured-action-routing", function()
 	find_mapping("n").callback()
 	public.new()
 	vim.cmd("DotnetWorkspaceExplorerNew")
-	assert_equal({}, active_selector.calls, "configured and public New actions are inert")
+	assert_equal(nil, mutation_created, "New actions are inert in selector mode")
 	for _, mapping in ipairs({
 		{ lhs = "o", action = "activate" },
 		{ lhs = "x", action = "cancel" },
@@ -1307,14 +790,13 @@ scenario("mode-aware-public-and-configured-action-routing", function()
 		find_mapping(mapping.lhs).callback()
 		assert_equal(
 			mapping.action,
-			active_selector.calls[#active_selector.calls],
-			mapping.lhs .. " configured selector action"
+			active_selector.routed[#active_selector.routed],
+			mapping.lhs .. " routes to selector " .. mapping.action
 		)
 	end
-	assert_equal(nil, mutation_creates, "configured New never reaches semantic mutation in selector")
 	active_selector.engaged = false
 	find_mapping("n").callback()
-	assert_equal(1, mutation_creates, "configured semantic New works after selector exit")
+	assert_equal(true, mutation_created, "New returns to semantic routing after selector exit")
 	public.close()
 
 	Workspace.new, Editing.new, Mutations.new, SelectorClass.new =

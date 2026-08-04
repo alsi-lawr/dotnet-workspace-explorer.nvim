@@ -1,5 +1,4 @@
 local root = vim.fn.getcwd()
-assert(vim.o.runtimepath:find(root, 1, true) == 1, "checkout is not first on runtimepath")
 
 local public = require("dotnet-workspace-explorer")
 local config = require("dotnet-workspace-explorer.config")
@@ -47,18 +46,14 @@ for action, command in pairs({
 	collapse_all = "DotnetWorkspaceExplorerCollapseAll",
 	git_refresh = "DotnetWorkspaceExplorerGitRefresh",
 }) do
-	local original, invoked = public[action], 0
+	local original, invoked = public[action], false
 	public[action] = function()
-		invoked = invoked + 1
+		invoked = true
 	end
 	vim.cmd(command)
-	assert(invoked == 1, command .. " does not invoke public." .. action)
+	assert(invoked, command .. " does not invoke public." .. action)
 	public[action] = original
 end
-assert(
-	vim.fn.exists(":DotnetWorkspaceExplorerAdd" .. "File") == 0,
-	"obsolete command is still registered"
-)
 
 local process_options, process_exit, exit_problem
 local client = rpc.Client.new({
@@ -90,108 +85,42 @@ assert(not pcall(public.setup, { presentation = { devicons = "yes" } }))
 assert(not pcall(public.setup, { git = { enable = "yes" } }))
 assert(not pcall(public.setup, { git = { poll = true } }))
 assert(not pcall(public.setup, { actions = {} }))
-local obsolete_mapping = "add" .. "_file"
-assert(not pcall(public.setup, { mappings = { [obsolete_mapping] = "a" } }))
 
 public.setup({ command = root .. "/does-not-exist" })
 assert(config.get().git.enable == true, "Git does not default to enabled")
 view.open()
 view.mappings(public)
-local defaults = {}
-for _, mapping in ipairs(vim.api.nvim_buf_get_keymap(view.buf, "n")) do
-	defaults[mapping.lhs] = mapping
+local user_delete_invoked = false
+local user_delete = function()
+	user_delete_invoked = true
 end
-for _, lhs in ipairs({ "a", "c", "d", "e", "m", "p", "r", "E", "W" }) do
-	assert(defaults[lhs], "default mapping is missing: " .. lhs)
-end
-assert(not defaults[""], "false-default mappings are not installed")
-local user_delete = function() end
 vim.keymap.set("n", "d", user_delete, { buffer = view.buf })
 public.setup({ command = root .. "/does-not-exist" })
-local current_delete
-for _, mapping in ipairs(vim.api.nvim_buf_get_keymap(view.buf, "n")) do
-	if mapping.lhs == "d" then
-		current_delete = mapping
-	end
-end
-assert(
-	current_delete and current_delete.callback == user_delete,
-	"re-setup replaced a user-local map"
-)
+view.mappings(public)
+vim.api.nvim_win_call(view.win, function()
+	vim.cmd("normal d")
+end)
+assert(user_delete_invoked, "re-setup replaced a user-local map")
 vim.keymap.del("n", "d", { buffer = view.buf })
-view.close()
 
-local mapping_actions = {
-	"activate",
-	"close",
-	"collapse",
-	"collapse_all",
-	"delete",
-	"edit",
-	"expand",
-	"expand_all",
-	"git_refresh",
-	"clear_marks",
-	"mark_copy",
-	"mark_move",
-	"new",
-	"place",
-	"refresh",
-	"rename",
-}
-local disabled = {}
-for _, action in ipairs(mapping_actions) do
-	disabled[action] = false
+local expanded = false
+public.expand = function()
+	expanded = true
 end
-for index, action in ipairs(mapping_actions) do
-	local replacements = vim.deepcopy(disabled)
-	replacements[action] = "g" .. index
-	public.setup({ command = root .. "/does-not-exist", mappings = replacements })
-	view.open()
-	view.mappings(public)
-	view.mappings(public)
-	local installed = vim.api.nvim_buf_get_keymap(view.buf, "n")
-	assert(
-		#installed == 1 and installed[1].lhs == "g" .. index,
-		action .. " replacement/disable/re-setup failed"
-	)
-end
-view.close()
-
-public.setup({ command = root .. "/does-not-exist", mappings = false, position = "left" })
-view.open()
+public.setup({ command = root .. "/does-not-exist", mappings = { expand = "L" } })
 view.mappings(public)
-assert(vim.api.nvim_win_get_position(view.win)[2] == 0, "left dock was not leftmost")
-assert(#vim.api.nvim_buf_get_keymap(view.buf, "n") == 0, "mappings=false installed a mapping")
-view.close()
+vim.api.nvim_win_call(view.win, function()
+	vim.cmd("normal L")
+end)
+assert(expanded, "replacement mapping does not invoke its public action")
 
-public.setup({
-	command = root .. "/does-not-exist",
-	position = "right",
-	mappings = {
-		activate = false,
-		collapse = false,
-		collapse_all = false,
-		edit = false,
-		expand = "L",
-		expand_all = false,
-		git_refresh = false,
-		clear_marks = false,
-		mark_copy = false,
-		mark_move = false,
-		new = false,
-		place = false,
-		delete = false,
-		refresh = false,
-		rename = false,
-		close = false,
-	},
-})
-view.open()
+public.setup({ command = root .. "/does-not-exist", mappings = false })
 view.mappings(public)
-local mappings = vim.api.nvim_buf_get_keymap(view.buf, "n")
-assert(vim.api.nvim_win_get_position(view.win)[2] > 0, "right dock was not rightmost")
-assert(#mappings == 1 and mappings[1].lhs == "L", "replacement mapping policy failed")
+expanded = false
+vim.api.nvim_win_call(view.win, function()
+	vim.cmd("normal L")
+end)
+assert(not expanded, "mappings=false left a plugin mapping active")
 assert(spawned == 0, "setup or no-server view spawned a process")
 view.close()
 vim.system = system

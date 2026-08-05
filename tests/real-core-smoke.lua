@@ -5,7 +5,7 @@ local core = assert(vim.env.DWE_CORE, "DWE_CORE is required")
 local fixture = assert(vim.env.DWE_FIXTURE, "DWE_FIXTURE is required")
 local fixture_root = vim.fs.dirname(fixture)
 local explorer = require("dotnet-workspace-explorer")
-local view = require("dotnet-workspace-explorer.view")
+local view = require("dotnet-workspace-explorer.ui.view")
 local notification, desired_create_kind, desired_display_name, desired_name, confirmation_result
 
 local function assert_equal(expected, actual, message)

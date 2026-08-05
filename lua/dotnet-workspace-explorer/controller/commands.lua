@@ -1,0 +1,54 @@
+local M = {}
+
+---@class DweCommandSpec
+---@field name string
+---@field action string
+---@field nargs 0|"?"
+
+---@type DweCommandSpec[]
+local command_specs = {
+	{ name = "DotnetWorkspaceExplorerOpen", action = "open", nargs = "?" },
+	{ name = "DotnetWorkspaceExplorerClose", action = "close", nargs = 0 },
+	{ name = "DotnetWorkspaceExplorerToggle", action = "toggle", nargs = "?" },
+	{ name = "DotnetWorkspaceExplorerFocus", action = "focus", nargs = 0 },
+	{ name = "DotnetWorkspaceExplorerRefresh", action = "refresh", nargs = 0 },
+	{ name = "DotnetWorkspaceExplorerActivate", action = "activate", nargs = 0 },
+	{ name = "DotnetWorkspaceExplorerExpand", action = "expand", nargs = 0 },
+	{ name = "DotnetWorkspaceExplorerCollapse", action = "collapse", nargs = 0 },
+	{ name = "DotnetWorkspaceExplorerNew", action = "new", nargs = 0 },
+	{ name = "DotnetWorkspaceExplorerDelete", action = "delete", nargs = 0 },
+	{ name = "DotnetWorkspaceExplorerEdit", action = "edit", nargs = 0 },
+	{ name = "DotnetWorkspaceExplorerRename", action = "rename", nargs = 0 },
+	{ name = "DotnetWorkspaceExplorerMarkMove", action = "mark_move", nargs = 0 },
+	{ name = "DotnetWorkspaceExplorerMarkCopy", action = "mark_copy", nargs = 0 },
+	{ name = "DotnetWorkspaceExplorerPlace", action = "place", nargs = 0 },
+	{ name = "DotnetWorkspaceExplorerClearMarks", action = "clear_marks", nargs = 0 },
+	{ name = "DotnetWorkspaceExplorerExpandAll", action = "expand_all", nargs = 0 },
+	{ name = "DotnetWorkspaceExplorerCollapseAll", action = "collapse_all", nargs = 0 },
+	{ name = "DotnetWorkspaceExplorerGitRefresh", action = "git_refresh", nargs = 0 },
+}
+
+---@param action string
+---@param accepts_argument boolean
+---@return fun(args: { args: string })
+local function callback(action, accepts_argument)
+	return function(args)
+		local public = require("dotnet-workspace-explorer")
+		if accepts_argument then
+			return public[action](args.args ~= "" and args.args or nil)
+		end
+		return public[action]()
+	end
+end
+
+---Registers all public Neovim commands, replacing stale definitions on reload.
+function M.register()
+	for _, spec in ipairs(command_specs) do
+		vim.api.nvim_create_user_command(spec.name, callback(spec.action, spec.nargs == "?"), {
+			nargs = spec.nargs,
+			force = true,
+		})
+	end
+end
+
+return M

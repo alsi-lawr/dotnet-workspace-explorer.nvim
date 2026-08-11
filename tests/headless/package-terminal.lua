@@ -284,11 +284,12 @@ if [ ! -t 0 ] || [ ! -t 1 ]; then
   printf 'DWE_NOT_TTY\n' > "$1"
   exit 71
 fi
-printf 'DWE_READY|%s|%s\n' "$#" "$1" > "$1"
+printf 'DWE_TTY_ARGV|%s|%s\n' "$#" "$1" > "$1"
 export DWE_REPORT="$1"
 exec nvim -u NONE -i NONE --noplugin \
   --cmd 'set noswapfile' \
-  --cmd 'au VimResized * call writefile(["S|".&lines." ".&columns],$DWE_REPORT,"a")'
+  --cmd 'au VimResized * call writefile(["S|".&lines." ".&columns],$DWE_REPORT,"a")' \
+  --cmd 'call writefile(["DWE_NVIM_READY"],$DWE_REPORT,"a")'
 ]])
 child_file:close()
 assert(vim.uv.fs_chmod(child, 493), "could not make terminal child executable")
@@ -301,9 +302,15 @@ local real_job = vim.b[real_buf].terminal_job_id
 assert_equal("terminal", vim.bo[real_buf].buftype, "jobstart term=true did not create a terminal")
 assert(
 	vim.wait(2000, function()
-		return file_text(real_target):find("DWE_READY|1|" .. real_target, 1, true) ~= nil
+		return file_text(real_target):find("DWE_TTY_ARGV|1|" .. real_target, 1, true) ~= nil
 	end),
 	"terminal child did not observe TTY stdin/stdout and one exact target argument"
+)
+assert(
+	vim.wait(2000, function()
+		return file_text(real_target):find("DWE_NVIM_READY", 1, true) ~= nil
+	end),
+	"terminal child did not install its resize observer"
 )
 
 vim.o.columns, vim.o.lines = 110, 42
@@ -329,7 +336,11 @@ assert(
 )
 
 vim.api.nvim_win_close(real_win, true)
-assert_equal(-1, vim.fn.jobwait({ real_job }, 0)[1], "real terminal job stopped on float close")
+assert_equal(
+	-1,
+	vim.fn.jobwait({ real_job }, 0)[1],
+	"real terminal job did not remain running after float close"
+)
 assert(vim.api.nvim_buf_is_valid(real_buf), "real terminal buffer was deleted on float close")
 assert(terminal.open({ child, real_target }, real_target), "real terminal did not reopen")
 assert_equal(real_buf, vim.api.nvim_get_current_buf(), "real terminal reopen replaced its buffer")

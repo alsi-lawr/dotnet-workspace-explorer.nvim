@@ -49,19 +49,28 @@ end
 ---@param callback fun(error: DweProblem?, ids?: DweNodeId[], invalidated?: boolean)
 function M.snapshot_children(self, snapshot, id, captured, callback)
 	local collected, token, seen_tokens = {}, nil, {}
+	local function owner_is_current()
+		return captured.owner == nil or self.expansion_owner == captured.owner
+	end
 	local function page()
+		if not owner_is_current() then
+			return
+		end
 		local parameters = { parentNodeId = id, pageSize = self.client.limits.maxPageSize }
 		if token then
 			parameters.continuationToken = token
 		end
 		self.client:request("workspace/children", parameters, function(request_error, result)
+			if not owner_is_current() then
+				return
+			end
 			if not self:_valid(captured.generation, captured.epoch, captured.workspace) then
 				return callback(errors.stale(), nil, true)
 			end
 			if request_error then
 				if request_error.code == "workspace_conflict" then
-					if captured.owner and self.expansion_owner ~= captured.owner then
-						return callback(errors.stale(), nil, true)
+					if not owner_is_current() then
+						return
 					end
 					self:_invalidate(captured.owner)
 					return callback(request_error, nil, true)
@@ -75,8 +84,8 @@ function M.snapshot_children(self, snapshot, id, captured, callback)
 				or type(result.nodes) ~= "table"
 				or not vim.islist(result.nodes)
 			then
-				if captured.owner and self.expansion_owner ~= captured.owner then
-					return callback(errors.stale(), nil, true)
+				if not owner_is_current() then
+					return
 				end
 				self:_invalidate(captured.owner)
 				return callback(errors.stale(), nil, true)

@@ -762,4 +762,49 @@ do
 	assert_equal("success", second_result, "replacement owner B succeeds")
 end
 
+do
+	local tree, client = harness()
+	tree.expanded = {}
+	local first_count = 0
+	tree:expand_all(function()
+		first_count = first_count + 1
+	end)
+	reply(client, pending(client, "workspace/root"), nil, root_response(1))
+	local late_first_child = pending(client, "workspace/children", "workspace")
+	tree:collapse_all()
+	assert_equal(1, first_count, "valid-page scenario preempts owner A once")
+
+	local second_count, second_result = 0, nil
+	tree:expand_all(function(problem)
+		second_count = second_count + 1
+		second_result = problem and problem.code or "success"
+	end)
+	local second_owner = tree.expansion_owner
+	local request_count = #client.requests
+	reply(client, late_first_child, nil, {
+		revision = 1,
+		parentNodeId = "workspace",
+		nodes = {},
+		nextToken = "owner-a-next",
+	})
+	assert_equal(second_owner, tree.expansion_owner, "valid late owner A page cannot replace B")
+	assert_equal(
+		request_count,
+		#client.requests,
+		"valid late owner A page cannot continue or reconcile"
+	)
+	assert_equal(1, first_count, "valid late owner A page cannot settle A again")
+	assert_equal(0, second_count, "valid late owner A page cannot settle B")
+
+	reply(client, pending(client, "workspace/root"), nil, root_response(1))
+	reply(
+		client,
+		pending(client, "workspace/children", "workspace"),
+		nil,
+		empty_workspace_children(1)
+	)
+	assert_equal(1, second_count, "owner B succeeds exactly once after valid late A page")
+	assert_equal("success", second_result, "owner B result remains successful")
+end
+
 print("DWE workspace presentation staging probe passed")

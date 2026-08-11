@@ -186,6 +186,7 @@ local original_notify = vim.notify
 local original_workspace_new = Workspace.new
 local original_view_schedule = view.schedule
 local writes = 0
+local notifications = 0
 
 local function lines()
 	return vim.api.nvim_buf_get_lines(view.buf, 0, -1, false)
@@ -216,7 +217,9 @@ end
 
 local ok, err = xpcall(function()
 	config.setup({ presentation = { devicons = false }, git = { enable = false } })
-	vim.notify = function() end
+	vim.notify = function()
+		notifications = notifications + 1
+	end
 	view.configure_scheduler(fake_scheduler)
 	view.open()
 	view.loading()
@@ -344,6 +347,14 @@ local ok, err = xpcall(function()
 	tree.marks.partial = true
 	tree.decorations.partial = { "unstaged" }
 	view.schedule(tree)
+	local notifications_before_final = notifications
+	actions.expand()
+	assert_equal(
+		notifications_before_final + 1,
+		notifications,
+		"a provisional target action reports its notification-only failure"
+	)
+	assert_equal(1, pending_count(), "notification-only failure preserves the final render")
 	advance(50)
 	assert_equal(3, writes, "completion flushes the latest canonical state")
 	assert(not lines()[2]:find("(loading)", 1, true), "completion removes the loading parent style")

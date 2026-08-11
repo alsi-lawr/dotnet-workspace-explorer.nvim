@@ -175,7 +175,9 @@ end
 
 ---@param problem DweProblem|string|unknown
 function M.failure(problem)
-	M.invalidate()
+	if not state.good then
+		M.invalidate()
+	end
 	renderer.failure(state, problem)
 	sync_public_state()
 end

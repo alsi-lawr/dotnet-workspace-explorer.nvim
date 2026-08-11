@@ -268,12 +268,14 @@
 ---@field mark_copy string|false
 ---@field mark_move string|false
 ---@field new string|false
+---@field packages string|false
 ---@field place string|false
 ---@field refresh string|false
 ---@field rename string|false
 
 ---@class DweConfig
 ---@field command string
+---@field package_command string
 ---@field target fun(): string
 ---@field position "left"|"right"
 ---@field presentation DwePresentationConfig
@@ -284,6 +286,7 @@
 
 ---@class DweConfigInput
 ---@field command? string
+---@field package_command? string
 ---@field target? fun(): string
 ---@field position? "left"|"right"
 ---@field presentation? table

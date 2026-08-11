@@ -5,6 +5,55 @@ local view = require("dotnet-workspace-explorer.ui.view")
 
 local M = {}
 
+---@param target unknown
+---@return true?, string?
+local function launch_packages(target)
+	if type(target) ~= "string" or not target:find("%S") then
+		return session.fail({ message = "Choose a nonblank Package Explorer target." })
+	end
+	local package_command = config.get().package_command
+	return require("dotnet-workspace-explorer.package_terminal").open(
+		{ package_command, target },
+		target
+	)
+end
+
+---@param tree DweWorkspaceTree
+---@param project_id DweNodeId
+local function launch_project_packages(tree, project_id)
+	tree:resolve_project(project_id, function(err, path)
+		if context.tree ~= tree or tree.phase ~= "ready" then
+			return session.fail({
+				code = "stale_tree",
+				message = "The workspace changed before Package Explorer could open. Try again.",
+			})
+		end
+		if err then
+			return session.fail(err)
+		end
+		launch_packages(path)
+	end)
+end
+
+---@param tree DweWorkspaceTree
+---@param id DweNodeId
+---@return DweNodeId?
+local function owning_project(tree, id)
+	local seen = {}
+	local parent_id = tree:parent(id)
+	while parent_id and not seen[parent_id] do
+		seen[parent_id] = true
+		local parent = tree:get_node(parent_id)
+		if not parent then
+			return nil
+		end
+		if parent.kind == "project" then
+			return parent_id
+		end
+		parent_id = tree:parent(parent_id)
+	end
+end
+
 ---@param action fun(id: DweNodeId)
 local function with_container(action)
 	local id = context.tree and view.selected(context.tree)
@@ -160,6 +209,55 @@ function M.git_refresh()
 		})
 	end
 	context.git_status:request()
+end
+
+---Opens Package Explorer for an explicit target or the supported selected workspace context.
+---@param requested? string
+function M.packages(requested)
+	if requested ~= nil then
+		return launch_packages(requested)
+	end
+	if context.selector and context.selector:is_engaged() then
+		return session.fail({ message = "Close Add Existing before opening Package Explorer." })
+	end
+
+	local tree = context.tree
+	if not tree or tree.phase ~= "ready" then
+		return session.fail({
+			message = "Open a ready workspace explorer before opening Package Explorer.",
+		})
+	end
+	local id = view.selected(tree)
+	local node = id and tree:get_node(id)
+	if not id or not node then
+		return session.fail({
+			message = "Select a workspace, project, or Dependencies node for Package Explorer.",
+		})
+	end
+
+	if node.kind == "workspace" and not node.parent_id then
+		return launch_packages(context.target)
+	end
+	if node.kind == "project" then
+		return launch_project_packages(tree, id)
+	end
+	if node.kind == "dependencyContainer" then
+		local project_id = owning_project(tree, id)
+		if not project_id then
+			return session.fail({
+				message = "The selected Dependencies node has no owning project.",
+			})
+		end
+		return launch_project_packages(tree, project_id)
+	end
+	return session.fail({
+		message = "Select a workspace root, project, or Dependencies node for Package Explorer.",
+	})
+end
+
+---Terminates the active Package Explorer session, if one exists.
+function M.packages_kill()
+	return require("dotnet-workspace-explorer.package_terminal").kill()
 end
 
 return M

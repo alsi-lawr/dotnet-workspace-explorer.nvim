@@ -14,6 +14,7 @@ local mapping_names = {
 	mark_copy = true,
 	mark_move = true,
 	new = true,
+	packages = true,
 	place = true,
 	refresh = true,
 	rename = true,
@@ -49,6 +50,7 @@ function M.input(options)
 	ensure_table(options, "options")
 	ensure_known_keys(options, {
 		command = true,
+		package_command = true,
 		target = true,
 		position = true,
 		presentation = true,
@@ -93,6 +95,9 @@ function M.complete(options)
 	if type(options.command) ~= "string" or options.command == "" then
 		fail("command must be a non-empty string")
 	end
+	if type(options.package_command) ~= "string" or options.package_command == "" then
+		fail("package_command must be a non-empty string")
+	end
 	local target_metatable = type(options.target) == "table" and getmetatable(options.target) or nil
 	local target_is_callable = type(options.target) == "function"
 		or (target_metatable ~= nil and type(target_metatable.__call) == "function")
@@ -119,9 +124,23 @@ function M.complete(options)
 	end
 
 	if options.mappings ~= false then
+		local assigned = {}
 		for name, mapping in pairs(options.mappings) do
 			if mapping ~= false and (type(mapping) ~= "string" or mapping == "") then
 				fail("mappings." .. name .. " must be a non-empty string or false")
+			end
+			if mapping ~= false then
+				local lhs = vim.keycode(mapping)
+				if assigned[lhs] then
+					fail(
+						("mappings.%s duplicates mappings.%s (%s)"):format(
+							name,
+							assigned[lhs],
+							mapping
+						)
+					)
+				end
+				assigned[lhs] = name
 			end
 		end
 	end

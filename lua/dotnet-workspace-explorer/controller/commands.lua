@@ -3,7 +3,7 @@ local M = {}
 ---@class DweCommandSpec
 ---@field name string
 ---@field action string
----@field nargs 0|"?"
+---@field nargs 0|1|"?"
 
 ---@type DweCommandSpec[]
 local command_specs = {
@@ -26,6 +26,8 @@ local command_specs = {
 	{ name = "DotnetWorkspaceExplorerExpandAll", action = "expand_all", nargs = 0 },
 	{ name = "DotnetWorkspaceExplorerCollapseAll", action = "collapse_all", nargs = 0 },
 	{ name = "DotnetWorkspaceExplorerGitRefresh", action = "git_refresh", nargs = 0 },
+	{ name = "DotnetWorkspaceExplorerPackages", action = "packages", nargs = 1 },
+	{ name = "DotnetWorkspaceExplorerPackagesKill", action = "packages_kill", nargs = 0 },
 }
 
 ---@param action string
@@ -44,7 +46,7 @@ end
 ---Registers all public Neovim commands, replacing stale definitions on reload.
 function M.register()
 	for _, spec in ipairs(command_specs) do
-		vim.api.nvim_create_user_command(spec.name, callback(spec.action, spec.nargs == "?"), {
+		vim.api.nvim_create_user_command(spec.name, callback(spec.action, spec.nargs ~= 0), {
 			nargs = spec.nargs,
 			force = true,
 		})

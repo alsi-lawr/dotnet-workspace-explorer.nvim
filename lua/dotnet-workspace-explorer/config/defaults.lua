@@ -4,6 +4,7 @@ local M = {}
 function M.create()
 	return {
 		command = "dotnet-we",
+		package_command = "dotnet-pe",
 		target = function()
 			return vim.fn.getcwd()
 		end,
@@ -36,6 +37,7 @@ function M.create()
 			mark_copy = "c",
 			mark_move = "m",
 			new = "a",
+			packages = "P",
 			place = "p",
 			delete = "d",
 			refresh = "R",

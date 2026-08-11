@@ -90,22 +90,17 @@ function M.snapshot_children(self, snapshot, id, captured, callback)
 				self:_invalidate(captured.owner)
 				return callback(errors.stale(), nil, true)
 			end
-			for _, child in ipairs(result.nodes) do
-				collected[#collected + 1] = child
-			end
-			token = result.nextToken
-			if token ~= nil then
-				if type(token) ~= "string" or token == "" or seen_tokens[token] then
+			local next_token = result.nextToken
+			if next_token ~= nil then
+				if type(next_token) ~= "string" or next_token == "" or seen_tokens[next_token] then
 					local reason =
 						rpc.problem("invalid_tree", "The children continuation is invalid.")
 					self.client:_terminate(reason)
 					return callback(reason)
 				end
-				seen_tokens[token] = true
-				return page()
 			end
 			local nodes, ids =
-				self:_normalize_nodes(collected, id, snapshot.revision, snapshot.nodes)
+				self:_normalize_nodes(result.nodes, id, snapshot.revision, snapshot.nodes)
 			if not nodes then
 				local reason =
 					rpc.problem("invalid_tree", "The workspace children response is invalid.")
@@ -115,8 +110,19 @@ function M.snapshot_children(self, snapshot, id, captured, callback)
 			for _, child in ipairs(nodes) do
 				snapshot.nodes[child.id] = child
 			end
-			snapshot.children[id] = ids
-			callback(nil, ids)
+			for _, child_id in ipairs(ids) do
+				collected[#collected + 1] = child_id
+			end
+			snapshot.children[id] = vim.deepcopy(collected)
+			if captured.on_page then
+				captured.on_page(snapshot, id, snapshot.children[id])
+			end
+			token = next_token
+			if token ~= nil then
+				seen_tokens[token] = true
+				return page()
+			end
+			callback(nil, snapshot.children[id])
 		end)
 	end
 	page()

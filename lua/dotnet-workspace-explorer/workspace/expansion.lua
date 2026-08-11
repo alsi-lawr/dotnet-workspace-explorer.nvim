@@ -162,7 +162,12 @@ function M.expand_all(self, callback)
 			return
 		end
 		settled = true
+		local had_overlay = owner.overlay ~= nil
 		staging.release_owner(self, owner)
+		owner.overlay = nil
+		if had_overlay and not result then
+			self.on_change(self)
+		end
 		callback(problem, result)
 	end
 	local function owns_snapshot()
@@ -177,6 +182,15 @@ function M.expand_all(self, callback)
 		workspace = self.workspace_id,
 		owner = owner,
 	}
+	captured.on_page = function(snapshot)
+		if
+			owns_snapshot()
+			and self:_valid(captured.generation, captured.epoch, captured.workspace)
+			and owner.overlay == snapshot
+		then
+			self.on_change(self)
+		end
+	end
 	local expected_revision = self.revision
 	local function retry_after_reconcile()
 		if
@@ -225,6 +239,8 @@ function M.expand_all(self, callback)
 			return finish(errors.stale())
 		end
 		snapshot.desired_expanded, snapshot.previous_nodes = nil, nil
+		owner.overlay = snapshot
+		self.on_change(self)
 		local pending, position = vim.deepcopy(snapshot.roots), 1
 		local function next_node()
 			if not owns_snapshot() then
@@ -239,9 +255,17 @@ function M.expand_all(self, callback)
 					selected = previous and previous.parent_id or nil
 				end
 				snapshot.selected_id = selected or snapshot.roots[1]
+				if
+					not owns_snapshot()
+					or not self:_valid(captured.generation, captured.epoch, captured.workspace)
+				then
+					return finish(errors.stale())
+				end
 				self.nodes, self.children, self.roots, self.expanded =
 					snapshot.nodes, snapshot.children, snapshot.roots, snapshot.expanded
-				self.selected_id = snapshot.selected_id
+				self.revision, self.selected_id = snapshot.revision, snapshot.selected_id
+				staging.release_owner(self, owner)
+				owner.overlay = nil
 				self.on_change(self)
 				return finish(nil, self)
 			end
@@ -255,6 +279,8 @@ function M.expand_all(self, callback)
 				end
 				if err then
 					if invalidated then
+						owner.overlay = nil
+						self.on_change(self)
 						return retry_after_reconcile()
 					end
 					return finish(err)

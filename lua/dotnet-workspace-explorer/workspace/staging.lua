@@ -165,6 +165,10 @@ end
 ---@param id DweNodeId
 ---@return DweNode?
 function M.presentation_node(state, id)
+	local owner = state.expansion_owner
+	if owner and owner.overlay and owner.overlay.nodes[id] then
+		return owner.overlay.nodes[id]
+	end
 	local canonical = state.nodes[id]
 	if canonical then
 		return canonical
@@ -182,6 +186,10 @@ end
 ---@param parent_id DweNodeId
 ---@return DweNodeId[]?
 function M.presentation_children(state, parent_id)
+	local owner = state.expansion_owner
+	if owner and owner.overlay and owner.overlay.nodes[parent_id] then
+		return owner.overlay.children[parent_id]
+	end
 	local stage = M.get(state, parent_id)
 	if stage then
 		return stage.ids
@@ -194,6 +202,15 @@ end
 ---@return DwePresentationMetadata
 function M.presentation_metadata(state, id)
 	ensure(state)
+	local owner = state.expansion_owner
+	if owner and owner.overlay and owner.overlay.nodes[id] then
+		return {
+			loading = true,
+			provisional = true,
+			actionable = false,
+			parent_id = owner.overlay.nodes[id].parent_id,
+		}
+	end
 	local parent_stage = state.stages[id]
 	if parent_stage then
 		return { loading = true, provisional = false, actionable = true, parent_id = id }
@@ -209,6 +226,20 @@ function M.presentation_metadata(state, id)
 		end
 	end
 	return { loading = false, provisional = false, actionable = state.nodes[id] ~= nil }
+end
+
+---@param state table
+---@return DweNodeId[]
+function M.presentation_roots(state)
+	local owner = state.expansion_owner
+	return owner and owner.overlay and owner.overlay.roots or state.roots
+end
+
+---@param state table
+---@return table<DweNodeId, boolean>
+function M.presentation_expanded(state)
+	local owner = state.expansion_owner
+	return owner and owner.overlay and owner.overlay.expanded or state.expanded
 end
 
 ---@param state table

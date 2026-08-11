@@ -633,6 +633,7 @@ do
 	local expansion_result
 	tree:expand("project", function(problem)
 		expansion_result = problem and problem.code
+		assert_equal(nil, tree.expansion_owner, "per-parent waiter settles before owner claim")
 	end)
 	local staged_page = pending(client, "workspace/children", "project")
 	local expand_all_result
@@ -663,6 +664,193 @@ end
 
 local function empty_workspace_children(revision)
 	return { revision = revision, parentNodeId = "workspace", nodes = {} }
+end
+
+local function snapshot_page(parent_id, revision, nodes, next_token)
+	return {
+		revision = revision,
+		parentNodeId = parent_id,
+		nodes = nodes,
+		nextToken = next_token,
+	}
+end
+
+do
+	local tree, client = harness()
+	tree.marks = { project = true }
+	local prior_nodes = vim.deepcopy(tree.nodes)
+	local callback_count, callback_result = 0, nil
+	tree:expand_all(function(problem)
+		callback_count = callback_count + 1
+		callback_result = problem and problem.code or "success"
+	end)
+	reply(client, pending(client, "workspace/root"), nil, root_response(1))
+	assert_equal(prior_nodes, tree.nodes, "root overlay leaves canonical nodes unchanged")
+	assert_equal({ "workspace" }, tree:presentation_roots(), "root page is immediately presentable")
+	assert_equal(
+		true,
+		tree:presentation_metadata("workspace").provisional,
+		"overlay root is read-only"
+	)
+
+	reply(
+		client,
+		pending(client, "workspace/children", "workspace"),
+		nil,
+		snapshot_page("workspace", 1, {
+			wire_node("project", "project", "Example.fsproj", 1),
+			wire_node("other", "projectFile", "Other.fs", 1),
+		})
+	)
+	assert_equal(
+		{ "project", "other" },
+		tree:presentation_children_of("workspace"),
+		"validated child page preserves server order in the overlay"
+	)
+	assert_equal(prior_nodes, tree.nodes, "child overlay leaves canonical nodes unchanged")
+
+	reply(
+		client,
+		pending(client, "workspace/children", "project"),
+		nil,
+		snapshot_page(
+			"project",
+			1,
+			{ wire_node("first", "projectFile", "First.fs", 1) },
+			"project-next"
+		)
+	)
+	assert_equal(
+		{ "first" },
+		tree:presentation_children_of("project"),
+		"first descendant page is visible before completion"
+	)
+	assert_equal(0, callback_count, "partial overlay does not settle Expand All")
+	reply(
+		client,
+		pending(client, "workspace/children", "project", "project-next"),
+		nil,
+		snapshot_page("project", 1, { wire_node("second", "projectFile", "Second.fs", 1) })
+	)
+	assert_equal(1, callback_count, "complete overlay promotes once")
+	assert_equal("success", callback_result, "complete overlay succeeds")
+	assert_equal(nil, tree.expansion_owner, "successful promotion releases ownership")
+	assert_equal({ "project", "other" }, tree.children.workspace, "root order promotes exactly")
+	assert_equal({ "first", "second" }, tree.children.project, "paged order promotes exactly")
+	assert_equal(true, tree.expanded.workspace, "root expansion promotes")
+	assert_equal(true, tree.expanded.project, "nested expansion promotes")
+	assert_equal("project", tree.selected_id, "semantic selection survives promotion")
+	assert_equal({ project = true }, tree.marks, "canonical marks survive promotion")
+	assert_equal(1, client.max_active_children, "whole-tree pages remain serially bounded")
+end
+
+do
+	local tree, client = harness()
+	local prior_nodes, prior_children = vim.deepcopy(tree.nodes), vim.deepcopy(tree.children)
+	local result
+	tree:expand_all(function(problem)
+		result = problem and problem.code or "success"
+	end)
+	reply(client, pending(client, "workspace/root"), nil, root_response(1))
+	local late = pending(client, "workspace/children", "workspace")
+	tree:collapse_all()
+	assert_equal("stale_tree", result, "Collapse All settles an overlay owner once")
+	assert_equal(prior_nodes, tree.nodes, "Collapse All restores prior canonical nodes")
+	assert_equal(prior_children, tree.children, "Collapse All restores prior canonical order")
+	local request_count, change_count = #client.requests, tree.changes
+	reply(client, late, nil, empty_workspace_children(1))
+	assert_equal(request_count, #client.requests, "late overlay callback cannot continue")
+	assert_equal(change_count, tree.changes, "late overlay callback cannot render")
+	assert_equal(prior_nodes, tree.nodes, "late overlay callback cannot promote")
+end
+
+for _, lifecycle in ipairs({
+	{
+		name = "refresh",
+		invoke = function(tree)
+			tree:refresh(function() end)
+		end,
+	},
+	{
+		name = "reset",
+		invoke = function(tree)
+			tree:_notification("workspace/reset", {})
+		end,
+	},
+	{
+		name = "failure",
+		invoke = function(tree)
+			tree:_fail({ code = "failed", message = "failed" })
+		end,
+	},
+	{
+		name = "session stop/close",
+		invoke = function(tree)
+			tree:stop("closed")
+		end,
+	},
+}) do
+	local tree, client = harness()
+	local prior_nodes, prior_children = vim.deepcopy(tree.nodes), vim.deepcopy(tree.children)
+	local settled = 0
+	tree:expand_all(function()
+		settled = settled + 1
+	end)
+	reply(client, pending(client, "workspace/root"), nil, root_response(1))
+	local late = pending(client, "workspace/children", "workspace")
+	lifecycle.invoke(tree)
+	assert_equal(nil, tree.expansion_owner, lifecycle.name .. " invalidates the exact owner")
+	assert_equal(1, settled, lifecycle.name .. " settles the owner exactly once")
+	assert_equal(prior_nodes, tree.nodes, lifecycle.name .. " preserves canonical nodes")
+	assert_equal(prior_children, tree.children, lifecycle.name .. " preserves canonical order")
+	local request_count, change_count = #client.requests, tree.changes
+	reply(client, late, nil, empty_workspace_children(1))
+	assert_equal(request_count, #client.requests, lifecycle.name .. " makes late callbacks inert")
+	assert_equal(change_count, tree.changes, lifecycle.name .. " blocks late renders")
+	assert_equal(1, settled, lifecycle.name .. " blocks duplicate settlement")
+end
+
+for _, failure in ipairs({
+	{ name = "producer failure", problem = { code = "backend_failed", message = "failed" } },
+}) do
+	local tree, client = harness()
+	local prior_nodes, prior_children = vim.deepcopy(tree.nodes), vim.deepcopy(tree.children)
+	local settled = 0
+	tree:expand_all(function()
+		settled = settled + 1
+	end)
+	reply(client, pending(client, "workspace/root"), nil, root_response(1))
+	reply(
+		client,
+		pending(client, "workspace/children", "workspace"),
+		failure.problem,
+		failure.result
+	)
+	assert_equal(nil, tree.expansion_owner, failure.name .. " releases the owner")
+	assert_equal(prior_nodes, tree.nodes, failure.name .. " restores canonical nodes")
+	assert_equal(prior_children, tree.children, failure.name .. " restores canonical order")
+	assert_equal(1, settled, failure.name .. " settles exactly once")
+end
+
+do
+	local tree, client = harness()
+	local prior_nodes, prior_children = vim.deepcopy(tree.nodes), vim.deepcopy(tree.children)
+	local settled = 0
+	tree:expand_all(function()
+		settled = settled + 1
+	end)
+	reply(client, pending(client, "workspace/root"), nil, root_response(1))
+	reply(client, pending(client, "workspace/children", "workspace"), nil, {
+		revision = 1,
+		parentNodeId = "workspace",
+		nodes = "invalid",
+	})
+	assert_equal(nil, tree.expansion_owner.overlay, "malformed page discards the visible overlay")
+	assert_equal(prior_nodes, tree.nodes, "malformed page restores canonical nodes")
+	assert_equal(prior_children, tree.children, "malformed page restores canonical order")
+	assert_equal(0, settled, "owner remains guarded only for its reconciliation retry")
+	tree:collapse_all()
+	assert_equal(1, settled, "Collapse All cancels the retained retry owner once")
 end
 
 do

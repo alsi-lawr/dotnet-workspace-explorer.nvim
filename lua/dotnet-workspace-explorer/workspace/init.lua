@@ -177,6 +177,14 @@ function Workspace:presentation_metadata(id)
 	return staging.presentation_metadata(self, id)
 end
 
+function Workspace:presentation_roots()
+	return staging.presentation_roots(self)
+end
+
+function Workspace:presentation_expanded()
+	return staging.presentation_expanded(self)
+end
+
 ---@param id DweNodeId
 ---@return boolean
 function Workspace:is_expandable(id)

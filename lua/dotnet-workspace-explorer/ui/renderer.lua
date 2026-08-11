@@ -204,7 +204,7 @@ end
 ---@param restoration? DweViewSnapshot
 function M.tree(state, tree, restoration)
 	render(state, {
-		roots = tree.roots,
+		roots = tree.presentation_roots and tree:presentation_roots() or tree.roots,
 		selected_id = tree.selected_id,
 		get = function(id)
 			return tree:presentation_node(id)
@@ -218,7 +218,7 @@ function M.tree(state, tree, restoration)
 		metadata = function(id)
 			return tree:presentation_metadata(id)
 		end,
-		expanded = tree.expanded,
+		expanded = tree.presentation_expanded and tree:presentation_expanded() or tree.expanded,
 		git_states = function(_, id)
 			return tree.decorations and tree.decorations[id]
 		end,

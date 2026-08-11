@@ -102,6 +102,7 @@
 ---@field kind "whole_tree"
 ---@field token integer
 ---@field cancel? fun(problem: DweProblem)
+---@field overlay? DweWorkspaceSnapshot
 
 ---@class DwePresentationMetadata
 ---@field loading boolean

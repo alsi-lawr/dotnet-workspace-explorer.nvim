@@ -257,8 +257,9 @@ function Workspace:_reconcile(callback, retry)
 	return reconcile.reconcile(self, callback, retry)
 end
 
-function Workspace:_invalidate()
-	return reconcile.invalidate(self)
+---@param retained_owner? DweExpansionOwner
+function Workspace:_invalidate(retained_owner)
+	return reconcile.invalidate(self, retained_owner)
 end
 
 ---@param method string

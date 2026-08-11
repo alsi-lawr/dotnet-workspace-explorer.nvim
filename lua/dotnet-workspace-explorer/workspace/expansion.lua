@@ -175,6 +175,7 @@ function M.expand_all(self, callback)
 		generation = self.client.generation,
 		epoch = self.epoch,
 		workspace = self.workspace_id,
+		owner = owner,
 	}
 	local expected_revision = self.revision
 	local function retry_after_reconcile()
@@ -216,7 +217,7 @@ function M.expand_all(self, callback)
 			return finish(request_error)
 		end
 		if type(result) ~= "table" or result.revision ~= expected_revision then
-			self:_invalidate()
+			self:_invalidate(owner)
 			return retry_after_reconcile()
 		end
 		local snapshot = self:_root_snapshot(result, expected_revision)

@@ -68,6 +68,7 @@
 ---@field generation integer
 ---@field epoch integer
 ---@field workspace string
+---@field owner? DweExpansionOwner
 
 ---@class DweWorkspaceSnapshot
 ---@field nodes table<DweNodeId, DweNode>

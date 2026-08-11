@@ -45,7 +45,7 @@ end
 ---@param self table
 ---@param snapshot table
 ---@param id DweNodeId
----@param captured { generation: integer, epoch: integer, workspace: string }
+---@param captured DweWorkspaceCapture
 ---@param callback fun(error: DweProblem?, ids?: DweNodeId[], invalidated?: boolean)
 function M.snapshot_children(self, snapshot, id, captured, callback)
 	local collected, token, seen_tokens = {}, nil, {}
@@ -60,7 +60,7 @@ function M.snapshot_children(self, snapshot, id, captured, callback)
 			end
 			if request_error then
 				if request_error.code == "workspace_conflict" then
-					self:_invalidate()
+					self:_invalidate(captured.owner)
 					return callback(request_error, nil, true)
 				end
 				return callback(request_error)
@@ -72,7 +72,7 @@ function M.snapshot_children(self, snapshot, id, captured, callback)
 				or type(result.nodes) ~= "table"
 				or not vim.islist(result.nodes)
 			then
-				self:_invalidate()
+				self:_invalidate(captured.owner)
 				return callback(errors.stale(), nil, true)
 			end
 			for _, child in ipairs(result.nodes) do
@@ -188,6 +188,7 @@ function M.reconcile(self, callback, retry)
 		generation = self.client.generation,
 		epoch = self.epoch,
 		workspace = self.workspace_id,
+		owner = self.expansion_owner,
 	}
 	local expected_revision = self.revision
 	self.client:request("workspace/root", {}, function(request_error, result)
@@ -240,9 +241,12 @@ end
 
 ---Marks the current snapshot stale and schedules reconciliation.
 ---@param self table
-function M.invalidate(self)
+---@param retained_owner? DweExpansionOwner
+function M.invalidate(self, retained_owner)
 	staging.discard_all(self, errors.stale())
-	staging.preempt_owner(self, errors.stale())
+	if self.expansion_owner ~= retained_owner then
+		staging.preempt_owner(self, errors.stale())
+	end
 	self.reflected_base_revision = nil
 	self.epoch, self.reconcile_queued = self.epoch + 1, true
 	if not self.reconciling and not self.reconciliation_deferred then

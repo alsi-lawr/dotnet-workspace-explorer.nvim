@@ -654,4 +654,74 @@ do
 	assert_equal("stale_tree", expand_all_result, "late owner callbacks cannot settle twice")
 end
 
+local function root_response(revision)
+	return {
+		revision = revision,
+		nodes = { wire_node("workspace", "workspace", "Example.slnx", revision) },
+	}
+end
+
+local function empty_workspace_children(revision)
+	return { revision = revision, parentNodeId = "workspace", nodes = {} }
+end
+
+do
+	local tree, client = harness()
+	tree.expanded = {}
+	local callback_count, callback_result = 0, nil
+	tree:expand_all(function(problem)
+		callback_count = callback_count + 1
+		callback_result = problem and problem.code or "success"
+	end)
+	local original_owner = tree.expansion_owner
+	reply(client, pending(client, "workspace/root"), nil, root_response(2))
+	assert_equal(0, callback_count, "stale Expand All root remains pending through reconciliation")
+	reply(client, pending(client, "workspace/root"), nil, root_response(2))
+	assert_equal(0, callback_count, "reconciliation does not settle the original callback")
+	assert(tree.expansion_owner ~= original_owner, "reconciled Expand All transfers to a new owner")
+	reply(client, pending(client, "workspace/root"), nil, root_response(2))
+	reply(
+		client,
+		pending(client, "workspace/children", "workspace"),
+		nil,
+		empty_workspace_children(2)
+	)
+	assert_equal(1, callback_count, "retried root path settles the original callback once")
+	assert_equal("success", callback_result, "retried root path succeeds")
+end
+
+do
+	local tree, client = harness()
+	tree.expanded = {}
+	local callback_count, callback_result = 0, nil
+	tree:expand_all(function(problem)
+		callback_count = callback_count + 1
+		callback_result = problem and problem.code or "success"
+	end)
+	local original_owner = tree.expansion_owner
+	reply(client, pending(client, "workspace/root"), nil, root_response(1))
+	reply(
+		client,
+		pending(client, "workspace/children", "workspace"),
+		nil,
+		empty_workspace_children(2)
+	)
+	assert_equal(
+		0,
+		callback_count,
+		"invalidated child snapshot remains pending through reconciliation"
+	)
+	reply(client, pending(client, "workspace/root"), nil, root_response(2))
+	assert(tree.expansion_owner ~= original_owner, "child retry transfers to a new owner")
+	reply(client, pending(client, "workspace/root"), nil, root_response(2))
+	reply(
+		client,
+		pending(client, "workspace/children", "workspace"),
+		nil,
+		empty_workspace_children(2)
+	)
+	assert_equal(1, callback_count, "retried child path settles the original callback once")
+	assert_equal("success", callback_result, "retried child snapshot path succeeds")
+end
+
 print("DWE workspace presentation staging probe passed")

@@ -724,4 +724,42 @@ do
 	assert_equal("success", callback_result, "retried child snapshot path succeeds")
 end
 
+do
+	local tree, client = harness()
+	tree.expanded = {}
+	local first_count, first_result = 0, nil
+	tree:expand_all(function(problem)
+		first_count = first_count + 1
+		first_result = problem and problem.code or "success"
+	end)
+	reply(client, pending(client, "workspace/root"), nil, root_response(1))
+	local late_first_child = pending(client, "workspace/children", "workspace")
+	tree:collapse_all()
+	assert_equal(1, first_count, "external preemption settles owner A once")
+	assert_equal("stale_tree", first_result, "externally preempted owner A is stale")
+
+	local second_count, second_result = 0, nil
+	tree:expand_all(function(problem)
+		second_count = second_count + 1
+		second_result = problem and problem.code or "success"
+	end)
+	local second_owner = tree.expansion_owner
+	local request_count = #client.requests
+	reply(client, late_first_child, { code = "workspace_conflict", message = "stale owner" })
+	assert_equal(second_owner, tree.expansion_owner, "late owner A cannot replace owner B")
+	assert_equal(request_count, #client.requests, "late owner A cannot reconcile or request")
+	assert_equal(0, second_count, "late owner A cannot settle owner B")
+
+	reply(client, pending(client, "workspace/root"), nil, root_response(1))
+	reply(
+		client,
+		pending(client, "workspace/children", "workspace"),
+		nil,
+		empty_workspace_children(1)
+	)
+	assert_equal(1, first_count, "late owner A cannot settle itself again")
+	assert_equal(1, second_count, "replacement owner B settles once")
+	assert_equal("success", second_result, "replacement owner B succeeds")
+end
+
 print("DWE workspace presentation staging probe passed")

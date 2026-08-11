@@ -60,6 +60,9 @@ function M.snapshot_children(self, snapshot, id, captured, callback)
 			end
 			if request_error then
 				if request_error.code == "workspace_conflict" then
+					if captured.owner and self.expansion_owner ~= captured.owner then
+						return callback(errors.stale(), nil, true)
+					end
 					self:_invalidate(captured.owner)
 					return callback(request_error, nil, true)
 				end
@@ -72,6 +75,9 @@ function M.snapshot_children(self, snapshot, id, captured, callback)
 				or type(result.nodes) ~= "table"
 				or not vim.islist(result.nodes)
 			then
+				if captured.owner and self.expansion_owner ~= captured.owner then
+					return callback(errors.stale(), nil, true)
+				end
 				self:_invalidate(captured.owner)
 				return callback(errors.stale(), nil, true)
 			end

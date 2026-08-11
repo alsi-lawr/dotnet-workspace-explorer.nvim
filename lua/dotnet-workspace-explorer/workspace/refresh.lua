@@ -1,4 +1,5 @@
 local errors = require("dotnet-workspace-explorer.workspace.errors")
+local staging = require("dotnet-workspace-explorer.workspace.staging")
 local M = {}
 local noop = function() end
 
@@ -8,6 +9,8 @@ local noop = function() end
 ---@param retried? boolean
 function M.refresh(self, callback, retried)
 	callback = callback or noop
+	staging.discard_all(self, errors.stale())
+	staging.preempt_owner(self, errors.stale())
 	local generation, epoch, workspace_id = self.client.generation, self.epoch, self.workspace_id
 	local expected_revision = self.revision
 	local function same_session()

@@ -1,6 +1,7 @@
 local errors = require("dotnet-workspace-explorer.workspace.errors")
 local node_model = require("dotnet-workspace-explorer.workspace.node")
 local rpc = require("dotnet-workspace-explorer.rpc")
+local staging = require("dotnet-workspace-explorer.workspace.staging")
 local value = require("dotnet-workspace-explorer.protocol.value")
 
 local M = {}
@@ -10,9 +11,11 @@ local noop = function() end
 ---@param self table
 ---@param id DweNodeId
 ---@param callback? fun(error: DweProblem?, ids?: DweNodeId[])
----@param retried? boolean
-function M.expand(self, id, callback, retried)
+function M.expand(self, id, callback)
 	callback = callback or noop
+	if self.expansion_owner or self.discarding_stages or self.preempting_owner then
+		return callback(errors.stale())
+	end
 	if not self.nodes[id] then
 		return callback(rpc.problem("unknown_node", "The node no longer exists."))
 	end
@@ -27,141 +30,107 @@ function M.expand(self, id, callback, retried)
 		return
 	end
 
-	local waiters = { callback }
-	self.loading[id] = waiters
-	local function deliver(err, result)
-		for _, waiter in ipairs(waiters) do
-			waiter(err, result)
-		end
-	end
-	local function restore_expansion()
-		if self.expanded[id] then
-			self.expanded[id] = previous_expanded
-		end
-	end
-	local function finish(err, result)
-		if self.loading[id] == waiters then
-			self.loading[id] = nil
-		end
-		deliver(err, result)
-	end
-	local function retry_after_reconcile()
-		local function resume(err)
-			if err then
-				restore_expansion()
-				return finish(err)
-			end
-			if not self.nodes[id] then
-				restore_expansion()
-				return finish(rpc.problem("unknown_node", "The node no longer exists."))
-			end
-			if not self.expanded[id] or self.children[id] then
-				return finish(nil, self.children[id])
-			end
-			if self.loading[id] == waiters then
-				self.loading[id] = nil
-			end
-			self:expand(id, function(retry_error, result)
-				if retry_error then
-					restore_expansion()
-				end
-				deliver(retry_error, result)
-			end, true)
-		end
-		if self.reconciling or self.reconcile_queued then
-			self.reconcile_waiters[#self.reconcile_waiters + 1] = resume
-		else
-			resume()
-		end
-	end
-
-	local captured_generation, captured_epoch = self.client.generation, self.epoch
-	local captured_workspace, expected_revision = self.workspace_id, self.revision
-	local collected, token, seen_tokens, response_revision = {}, nil, {}, nil
-	local awaiting_delta = false
+	local stage = staging.create(self, id, previous_expanded, callback)
+	self.on_change(self)
 	local function page()
+		if not staging.is_current(self, stage) then
+			return
+		end
 		local parameters = { parentNodeId = id, pageSize = self.client.limits.maxPageSize }
-		if token then
-			parameters.continuationToken = token
+		if stage.next_token then
+			parameters.continuationToken = stage.next_token
 		end
 		self.client:request("workspace/children", parameters, function(request_error, result)
-			if not self:_valid(captured_generation, captured_epoch, captured_workspace) then
-				if
-					not retried
-					and self.client.generation == captured_generation
-					and not self.client.inert
-					and self.workspace_id == captured_workspace
-					and self.nodes[id]
-					and self.expanded[id]
-				then
-					return retry_after_reconcile()
-				end
-				return finish(errors.stale())
+			if not staging.is_current(self, stage) then
+				return staging.discard(self, stage, errors.stale())
 			end
 			if request_error then
-				if request_error.code == "workspace_conflict" and not retried then
-					self:_invalidate()
-					return retry_after_reconcile()
-				end
-				restore_expansion()
+				staging.discard(self, stage, request_error)
 				if request_error.code == "workspace_conflict" then
 					self:_invalidate()
 				end
-				return finish(request_error)
+				return
 			end
 			if
 				type(result) ~= "table"
 				or not value.is_integer(result.revision)
-				or result.revision < expected_revision
-				or response_revision and result.revision ~= response_revision
+				or result.revision < stage.base_revision
+				or stage.page_revision and result.revision ~= stage.page_revision
 				or result.parentNodeId ~= id
 				or type(result.nodes) ~= "table"
 				or not vim.islist(result.nodes)
 			then
 				self:_invalidate()
-				if not retried then
-					return retry_after_reconcile()
+				return
+			end
+
+			local existing = {}
+			for node_id, node in pairs(self.nodes) do
+				existing[node_id] = node
+			end
+			for node_id, node in pairs(stage.nodes) do
+				existing[node_id] = node
+			end
+			for _, other_stage in pairs(self.stages) do
+				if other_stage ~= stage then
+					for node_id, node in pairs(other_stage.nodes) do
+						existing[node_id] = node
+					end
 				end
-				restore_expansion()
-				return finish(errors.stale())
 			end
-			response_revision = response_revision or result.revision
-			if response_revision > self.revision then
-				self.reflected_base_revision = self.revision
-				self.revision = response_revision
-				awaiting_delta = true
-			end
-			for _, child in ipairs(result.nodes) do
-				collected[#collected + 1] = child
-			end
-			token = result.nextToken
-			if token ~= nil then
-				if type(token) ~= "string" or token == "" or seen_tokens[token] then
-					local reason =
-						rpc.problem("invalid_tree", "The children continuation is invalid.")
-					restore_expansion()
-					finish(reason)
-					return self.client:_terminate(reason)
-				end
-				seen_tokens[token] = true
-				return page()
-			end
-			local nodes, ids = self:_normalize_nodes(collected, id, response_revision, self.nodes)
+			local nodes, ids = self:_normalize_nodes(result.nodes, id, result.revision, existing)
 			if not nodes then
 				local reason =
 					rpc.problem("invalid_tree", "The workspace children response is invalid.")
-				restore_expansion()
-				finish(reason)
+				staging.discard(self, stage, reason)
 				return self.client:_terminate(reason)
 			end
-			for _, child in ipairs(nodes) do
-				self.nodes[child.id] = child
+			local next_token = result.nextToken
+			if
+				next_token ~= nil
+				and (
+					type(next_token) ~= "string"
+					or next_token == ""
+					or stage.seen_tokens[next_token]
+				)
+			then
+				local reason = rpc.problem("invalid_tree", "The children continuation is invalid.")
+				staging.discard(self, stage, reason)
+				return self.client:_terminate(reason)
 			end
-			self.children[id] = ids
-			if not awaiting_delta then
-				self.on_change(self)
+
+			stage.page_revision = stage.page_revision or result.revision
+			if stage.page_revision < self.revision then
+				return self:_invalidate()
+			elseif stage.page_revision > self.revision then
+				if self.reflected_base_revision ~= nil then
+					return self:_invalidate()
+				end
+				self.reflected_base_revision = self.revision
+				self.revision = stage.page_revision
+				stage.awaiting_delta = true
+			elseif self.reflected_base_revision ~= nil then
+				stage.awaiting_delta = true
 			end
-			finish(nil, ids)
+			for index, child in ipairs(nodes) do
+				stage.nodes[child.id] = child
+				stage.ids[#stage.ids + 1] = ids[index]
+			end
+			stage.next_token = next_token
+			if next_token ~= nil then
+				stage.seen_tokens[next_token] = true
+			end
+			self.on_change(self)
+			if not staging.is_current(self, stage) then
+				return
+			end
+			if next_token ~= nil then
+				return page()
+			end
+			stage.complete = true
+			if not stage.awaiting_delta and not staging.promote(self, stage) then
+				self:_invalidate()
+			end
 		end)
 	end
 	page()
@@ -170,6 +139,10 @@ end
 ---@param self table
 ---@param id DweNodeId
 function M.collapse(self, id)
+	local stage = staging.get(self, id)
+	if stage then
+		staging.discard(self, stage, errors.stale(), false)
+	end
 	self.expanded[id] = nil
 	self.on_change(self)
 end
@@ -179,8 +152,24 @@ end
 ---@param callback? DweWorkspaceCallback
 function M.expand_all(self, callback)
 	callback = callback or noop
-	if self.phase ~= "ready" then
+	if self.phase ~= "ready" or self.discarding_stages or self.preempting_owner then
 		return callback(rpc.problem("not_ready", "The workspace tree is not ready."))
+	end
+	local owner = staging.claim_owner(self)
+	local settled = false
+	local function finish(problem, result)
+		if settled then
+			return
+		end
+		settled = true
+		staging.release_owner(self, owner)
+		callback(problem, result)
+	end
+	local function owns_snapshot()
+		return staging.owns(self, owner)
+	end
+	owner.cancel = function(problem)
+		finish(problem or errors.stale())
 	end
 	local captured = {
 		generation = self.client.generation,
@@ -193,17 +182,21 @@ function M.expand_all(self, callback)
 			self.client.generation ~= captured.generation
 			or self.client.inert
 			or self.workspace_id ~= captured.workspace
+			or not owns_snapshot()
 		then
-			return callback(errors.stale())
+			return finish(errors.stale())
 		end
 		local function resume(err)
 			if err then
-				return callback(err)
+				return finish(err)
 			end
-			if self.revision <= expected_revision then
-				return callback(errors.stale())
+			if self.revision <= expected_revision or not owns_snapshot() then
+				return finish(errors.stale())
 			end
-			self:expand_all(callback)
+			staging.release_owner(self, owner)
+			self:expand_all(function(problem, result)
+				finish(problem, result)
+			end)
 		end
 		if self.reconciling or self.reconcile_queued then
 			self.reconcile_waiters[#self.reconcile_waiters + 1] = resume
@@ -213,11 +206,14 @@ function M.expand_all(self, callback)
 	end
 
 	self.client:request("workspace/root", {}, function(request_error, result)
-		if not self:_valid(captured.generation, captured.epoch, captured.workspace) then
-			return callback(errors.stale())
+		if
+			not owns_snapshot()
+			or not self:_valid(captured.generation, captured.epoch, captured.workspace)
+		then
+			return finish(errors.stale())
 		end
 		if request_error then
-			return callback(request_error)
+			return finish(request_error)
 		end
 		if type(result) ~= "table" or result.revision ~= expected_revision then
 			self:_invalidate()
@@ -225,11 +221,14 @@ function M.expand_all(self, callback)
 		end
 		local snapshot = self:_root_snapshot(result, expected_revision)
 		if not snapshot or snapshot.revision ~= expected_revision then
-			return callback(errors.stale())
+			return finish(errors.stale())
 		end
 		snapshot.desired_expanded, snapshot.previous_nodes = nil, nil
 		local pending, position = vim.deepcopy(snapshot.roots), 1
 		local function next_node()
+			if not owns_snapshot() then
+				return finish(errors.stale())
+			end
 			local id = pending[position]
 			position = position + 1
 			if not id then
@@ -243,18 +242,21 @@ function M.expand_all(self, callback)
 					snapshot.nodes, snapshot.children, snapshot.roots, snapshot.expanded
 				self.selected_id = snapshot.selected_id
 				self.on_change(self)
-				return callback(nil, self)
+				return finish(nil, self)
 			end
 			if not node_model.is_expandable(snapshot.nodes[id]) then
 				return next_node()
 			end
 			snapshot.expanded[id] = true
 			self:_snapshot_children(snapshot, id, captured, function(err, ids, invalidated)
+				if not owns_snapshot() then
+					return finish(errors.stale())
+				end
 				if err then
 					if invalidated then
 						return retry_after_reconcile()
 					end
-					return callback(err)
+					return finish(err)
 				end
 				for _, child_id in ipairs(ids) do
 					if node_model.is_expandable(snapshot.nodes[child_id]) then
@@ -270,6 +272,8 @@ end
 
 ---@param self table
 function M.collapse_all(self)
+	staging.discard_all(self, errors.stale(), false)
+	staging.preempt_owner(self, errors.stale())
 	self.expanded = {}
 	self.on_change(self)
 end

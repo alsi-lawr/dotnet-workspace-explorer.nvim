@@ -1,6 +1,7 @@
 local errors = require("dotnet-workspace-explorer.workspace.errors")
 local node_model = require("dotnet-workspace-explorer.workspace.node")
 local rpc = require("dotnet-workspace-explorer.rpc")
+local staging = require("dotnet-workspace-explorer.workspace.staging")
 
 local M = {}
 
@@ -218,6 +219,8 @@ function M.reconcile(self, callback, retry)
 			end
 			self.reconciling = false
 			if restore_error then
+				staging.discard_all(self, restore_error)
+				staging.preempt_owner(self, restore_error)
 				self.phase = "failed"
 				if not self.client.inert then
 					self.on_error(restore_error)
@@ -238,6 +241,8 @@ end
 ---Marks the current snapshot stale and schedules reconciliation.
 ---@param self table
 function M.invalidate(self)
+	staging.discard_all(self, errors.stale())
+	staging.preempt_owner(self, errors.stale())
 	self.reflected_base_revision = nil
 	self.epoch, self.reconcile_queued = self.epoch + 1, true
 	if not self.reconciling and not self.reconciliation_deferred then
@@ -251,8 +256,22 @@ end
 function M.notification(self, method, parameters)
 	if method == "workspace/delta" then
 		if self.reconciliation_deferred then
+			staging.discard_all(self, errors.stale())
+			staging.preempt_owner(self, errors.stale())
 			self.deferred_reconciliation = true
 			self.on_notification(method, parameters)
+		elseif self.expansion_owner then
+			self:_invalidate()
+		elseif staging.has_active(self) then
+			if
+				staging.can_retain_reflected(self, parameters)
+				and self._delta.apply(self, parameters, node_model.normalize)
+				and staging.reflected_applied(self)
+			then
+				self.on_change(self)
+			else
+				self:_invalidate()
+			end
 		elseif self._delta.apply(self, parameters, node_model.normalize) then
 			self.on_change(self)
 		else
@@ -260,6 +279,8 @@ function M.notification(self, method, parameters)
 		end
 	elseif method == "workspace/reset" then
 		if self.reconciliation_deferred then
+			staging.discard_all(self, errors.stale())
+			staging.preempt_owner(self, errors.stale())
 			self.deferred_reconciliation = true
 			self.on_notification(method, parameters)
 		else

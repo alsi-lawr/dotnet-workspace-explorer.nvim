@@ -79,6 +79,35 @@
 ---@field revision integer
 ---@field selected_id? DweNodeId
 
+---@class DweExpansionStage
+---@field token integer
+---@field parent_id DweNodeId
+---@field generation integer
+---@field epoch integer
+---@field workspace_id string
+---@field base_revision integer
+---@field page_revision? integer
+---@field next_token? string
+---@field seen_tokens table<string, boolean>
+---@field nodes table<DweNodeId, DweNode>
+---@field ids DweNodeId[]
+---@field waiters DweExpansionWaiter[]
+---@field previous_expanded? boolean
+---@field complete boolean
+---@field awaiting_delta boolean
+---@field settled boolean
+
+---@class DweExpansionOwner
+---@field kind "whole_tree"
+---@field token integer
+---@field cancel? fun(problem: DweProblem)
+
+---@class DwePresentationMetadata
+---@field loading boolean
+---@field provisional boolean
+---@field actionable boolean
+---@field parent_id? DweNodeId
+
 ---@class DweRpcWorkspace
 ---@field id string
 ---@field revision integer
@@ -98,7 +127,10 @@
 ---@class DweWorkspaceTree
 ---@field nodes table<DweNodeId, DweNode>
 ---@field children table<DweNodeId, DweNodeId[]>
----@field loading table<DweNodeId, DweWorkspaceCallback[]>
+---@field loading table<DweNodeId, DweExpansionWaiter[]>
+---@field stages table<DweNodeId, DweExpansionStage>
+---@field next_expansion_token integer
+---@field expansion_owner? DweExpansionOwner
 ---@field roots DweNodeId[]
 ---@field expanded table<DweNodeId, boolean>
 ---@field selected_id? DweNodeId
@@ -297,4 +329,5 @@
 
 ---@alias DweErrorFirstCallback fun(error: DweProblem?, result: unknown?)
 ---@alias DweWorkspaceCallback fun(error: DweProblem?, result: DweWorkspaceTree?)
+---@alias DweExpansionWaiter fun(error: DweProblem?, result: DweNodeId[]?)
 ---@alias DweBooleanCallback fun(value: boolean)

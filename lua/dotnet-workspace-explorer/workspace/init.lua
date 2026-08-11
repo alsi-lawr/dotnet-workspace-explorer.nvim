@@ -5,6 +5,7 @@ local node_model = require("dotnet-workspace-explorer.workspace.node")
 local reconcile = require("dotnet-workspace-explorer.workspace.reconcile")
 local refresh = require("dotnet-workspace-explorer.workspace.refresh")
 local rpc = require("dotnet-workspace-explorer.rpc")
+local staging = require("dotnet-workspace-explorer.workspace.staging")
 
 local M = {}
 
@@ -31,8 +32,7 @@ function Workspace.new(options)
 			self:_notification(method, parameters)
 		end,
 		on_error = function(reason)
-			self.phase = "failed"
-			self.on_error(reason)
+			self:_fail(reason)
 		end,
 		git_enabled = options.git_enabled == true,
 	})
@@ -41,6 +41,9 @@ function Workspace.new(options)
 		nodes = {},
 		children = {},
 		loading = {},
+		stages = {},
+		next_expansion_token = 0,
+		expansion_owner = nil,
 		roots = {},
 		expanded = {},
 		selected_id = nil,
@@ -153,6 +156,27 @@ function Workspace:children_of(id)
 	return self.children[id]
 end
 
+---Returns a canonical node or an active provisional node for presentation only.
+---@param id DweNodeId
+---@return DweNode?
+function Workspace:presentation_node(id)
+	return staging.presentation_node(self, id)
+end
+
+---Returns active staged children when present, otherwise canonical children.
+---@param id DweNodeId
+---@return DweNodeId[]?
+function Workspace:presentation_children_of(id)
+	return staging.presentation_children(self, id)
+end
+
+---Describes whether a presentation row is loading, provisional, and actionable.
+---@param id DweNodeId
+---@return DwePresentationMetadata
+function Workspace:presentation_metadata(id)
+	return staging.presentation_metadata(self, id)
+end
+
 ---@param id DweNodeId
 ---@return boolean
 function Workspace:is_expandable(id)
@@ -162,6 +186,14 @@ end
 ---@return boolean
 function Workspace:is_terminal()
 	return self.client.inert or self.client.state == "failed"
+end
+
+---@param reason DweProblem
+function Workspace:_fail(reason)
+	staging.discard_all(self, reason)
+	staging.preempt_owner(self, reason)
+	self.phase = "failed"
+	self.on_error(reason)
 end
 
 ---@param method string
@@ -181,6 +213,8 @@ end
 ---@param reason? string
 ---@param force? boolean
 function Workspace:stop(reason, force)
+	staging.discard_all(self)
+	staging.preempt_owner(self)
 	self.epoch = self.epoch + 1
 	self.phase = "stopped"
 	self.client:stop(reason, force)
@@ -243,10 +277,9 @@ function Workspace:resume_reconciliation(revision)
 end
 
 ---@param id DweNodeId
----@param callback? DweWorkspaceCallback
----@param retried? boolean
-function Workspace:expand(id, callback, retried)
-	return expansion.expand(self, id, callback, retried)
+---@param callback? DweExpansionWaiter
+function Workspace:expand(id, callback)
+	return expansion.expand(self, id, callback)
 end
 
 ---@param id DweNodeId

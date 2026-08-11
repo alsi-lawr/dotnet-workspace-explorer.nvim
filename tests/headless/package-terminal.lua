@@ -56,10 +56,11 @@ local original = {
 	jobstart = vim.fn.jobstart,
 	jobstop = vim.fn.jobstop,
 	notify = vim.notify,
+	chan_send = vim.api.nvim_chan_send,
 	open_win = vim.api.nvim_open_win,
 	schedule = vim.schedule,
 }
-local launches, stopped, notifications, scheduled, opened = {}, {}, {}, {}, {}
+local launches, stopped, notifications, scheduled, opened, channel_writes = {}, {}, {}, {}, {}, {}
 local next_job = 40
 local next_start_result
 
@@ -88,6 +89,9 @@ end
 vim.fn.jobstop = function(job_id)
 	stopped[#stopped + 1] = job_id
 	return 1
+end
+vim.api.nvim_chan_send = function(channel, data)
+	channel_writes[#channel_writes + 1] = { channel = channel, data = data }
 end
 vim.api.nvim_open_win = function(buf, enter, config)
 	opened[#opened + 1] = vim.deepcopy(config)
@@ -151,6 +155,19 @@ assert_equal(
 	vim.api.nvim_get_option_value("winhighlight", { win = first_win }),
 	"float window highlights"
 )
+assert_equal(0, #scheduled, "new float reported its size before the terminal queried it")
+launches[1].options.on_stdout(41, { "\27[1" }, "stdout")
+assert_equal(0, #scheduled, "partial terminal size query scheduled a response")
+launches[1].options.on_stdout(41, { "8t" }, "stdout")
+assert_equal(1, #scheduled, "terminal size query did not schedule a response")
+run_scheduled()
+assert_equal({
+	channel = 41,
+	data = ("\27[8;%d;%dt"):format(
+		vim.api.nvim_win_get_height(first_win),
+		vim.api.nvim_win_get_width(first_win)
+	),
+}, channel_writes[1], "initial terminal character-size report")
 
 explorer_session.close()
 assert(explorer_stopped(), "visible explorer session was not closed")
@@ -169,6 +186,8 @@ assert(vim.api.nvim_win_is_valid(first_win), "later explorer session changed pac
 vim.api.nvim_win_close(first_win, true)
 assert(vim.api.nvim_buf_is_valid(first_buf), "float close deleted the terminal buffer")
 assert_equal(0, #stopped, "float close stopped the terminal job")
+launches[1].options.on_stdout(41, { "\27[18t" }, "stdout")
+assert_equal(1, #scheduled, "hidden terminal size query was not retained")
 
 view.open()
 local hidden_explorer_stopped = install_explorer_context("workspace-three")
@@ -182,10 +201,20 @@ local reopened_win = vim.api.nvim_get_current_win()
 assert_equal(1, #launches, "same target started a second job")
 assert_equal(first_buf, vim.api.nvim_win_get_buf(reopened_win), "same target replaced the buffer")
 assert(reopened_win ~= first_win, "same target reused a closed window")
+assert_equal(2, #scheduled, "reopened float did not resume its pending terminal size report")
+run_scheduled()
+assert_equal({
+	channel = 41,
+	data = ("\27[8;%d;%dt"):format(
+		vim.api.nvim_win_get_height(reopened_win),
+		vim.api.nvim_win_get_width(reopened_win)
+	),
+}, channel_writes[2], "reopened terminal character-size report")
 vim.api.nvim_set_current_win(base_win)
 assert(terminal.open({ "fake-package-explorer", target }, target), "same target did not focus")
 assert_equal(reopened_win, vim.api.nvim_get_current_win(), "same target did not focus its float")
 assert_equal(2, #opened, "same visible target opened another float")
+assert_equal(0, #scheduled, "focusing a visible float scheduled another size report")
 
 local accepted, conflict = terminal.open({ "fake-package-explorer", "/tmp/other.fsproj" }, "other")
 assert_equal(nil, accepted, "different target was accepted")
@@ -228,16 +257,26 @@ assert(explorer_during_kill(), "explorer did not retain ownership of its own clo
 
 assert(terminal.open({ "fake-package-explorer", target }, target), "second terminal launch failed")
 local second = launches[2]
+second.options.on_stdout(42, { "\27[18t" }, "stdout")
 terminal.kill()
 assert_equal({ 41, 42 }, stopped, "second kill did not stop its job")
 assert(terminal.open({ "fake-package-explorer", target }, target), "third terminal launch failed")
 local third = launches[3]
 local third_win = vim.api.nvim_get_current_win()
+third.options.on_stdout(43, { "\27[18t" }, "stdout")
 first_exit(41, 0, "exit")
 second.options.on_exit(42, 0, "exit")
 run_scheduled()
 assert(vim.api.nvim_buf_is_valid(third.buf), "stale exit callback deleted a later buffer")
 assert(vim.api.nvim_win_is_valid(third_win), "stale exit callback closed a later float")
+assert_equal(3, #channel_writes, "stale session emitted a terminal size report")
+assert_equal({
+	channel = 43,
+	data = ("\27[8;%d;%dt"):format(
+		vim.api.nvim_win_get_height(third_win),
+		vim.api.nvim_win_get_width(third_win)
+	),
+}, channel_writes[3], "replacement terminal character-size report")
 
 third.options.on_exit(43, 17, "exit")
 run_scheduled()
@@ -248,9 +287,12 @@ assert_equal({ 41, 42 }, stopped, "natural exit stopped an unrelated job")
 assert(terminal.open({ "fake-package-explorer", target }, target), "wipe terminal launch failed")
 local wiped = launches[4]
 local wiped_win = vim.api.nvim_get_current_win()
+wiped.options.on_stdout(44, { "\27[18t" }, "stdout")
 vim.api.nvim_buf_delete(wiped.buf, { force = true })
 assert_equal({ 41, 42, 44 }, stopped, "direct buffer wipe did not stop its job")
 assert(not vim.api.nvim_win_is_valid(wiped_win), "direct buffer wipe retained the float")
+run_scheduled()
+assert_equal(3, #channel_writes, "wiped session emitted a terminal size report")
 
 local launch_count = #launches
 local missing_ok = terminal.open({ "missing-package-explorer", target }, target)
@@ -274,6 +316,7 @@ vim.fn.executable = original.executable
 vim.fn.jobstart = original.jobstart
 vim.fn.jobstop = original.jobstop
 vim.notify = original.notify
+vim.api.nvim_chan_send = original.chan_send
 vim.api.nvim_open_win = original.open_win
 vim.schedule = original.schedule
 

@@ -4,6 +4,7 @@ local group =
 	vim.api.nvim_create_augroup("DotnetWorkspaceExplorerPackageTerminal", { clear = true })
 local session
 local next_token = 0
+local size_query = "\27[18t"
 
 local float_highlight = "DotnetWorkspaceExplorerPackageFloat"
 local border_highlight = "DotnetWorkspaceExplorerPackageFloatBorder"
@@ -53,6 +54,38 @@ end
 
 local function valid_window(win)
 	return win ~= nil and vim.api.nvim_win_is_valid(win)
+end
+
+local function schedule_size_report(active)
+	local token = active.token
+	vim.schedule(function()
+		local win = active.win
+		if
+			session ~= active
+			or active.token ~= token
+			or not active.size_report_pending
+			or not valid_window(win)
+			or not active.job_id
+		then
+			return
+		end
+		local rows = vim.api.nvim_win_get_height(win)
+		local columns = vim.api.nvim_win_get_width(win)
+		local sent =
+			pcall(vim.api.nvim_chan_send, active.job_id, ("\27[8;%d;%dt"):format(rows, columns))
+		if sent then
+			active.size_report_pending = false
+		end
+	end)
+end
+
+local function observe_output(active, data)
+	local output = active.size_query_tail .. table.concat(data or {}, "\n")
+	active.size_query_tail = output:sub(math.max(1, #output - #size_query + 2))
+	if output:find(size_query, 1, true) then
+		active.size_report_pending = true
+		schedule_size_report(active)
+	end
 end
 
 local function close_window(active)
@@ -109,6 +142,9 @@ local function show(active)
 		end,
 	})
 	vim.cmd("startinsert")
+	if active.size_report_pending then
+		schedule_size_report(active)
+	end
 end
 
 local function reconcile_layout()
@@ -184,6 +220,8 @@ function M.open(argv, target)
 	local active = {
 		buf = vim.api.nvim_create_buf(false, true),
 		job_id = nil,
+		size_query_tail = "",
+		size_report_pending = false,
 		target = target,
 		token = next_token,
 		win = nil,
@@ -195,6 +233,9 @@ function M.open(argv, target)
 	local started, job_or_error = pcall(vim.api.nvim_buf_call, active.buf, function()
 		return vim.fn.jobstart(argv, {
 			term = true,
+			on_stdout = function(_, data)
+				observe_output(active, data)
+			end,
 			on_exit = function(job_id)
 				local token = active.token
 				vim.schedule(function()

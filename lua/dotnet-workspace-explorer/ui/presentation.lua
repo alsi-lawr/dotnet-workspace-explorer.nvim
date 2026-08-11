@@ -22,6 +22,8 @@ M.links = {
 	GitUnmerged = "DiffText",
 	GitUntracked = "DiffAdd",
 	GitIgnored = "Comment",
+	Loading = "DiagnosticInfo",
+	Provisional = "Comment",
 }
 
 ---@class DwePresentationKind

@@ -89,6 +89,7 @@ function M.collapse()
 		return context.selector:collapse()
 	end
 	with_container(function(id)
+		view.invalidate()
 		context.tree:collapse(id)
 	end)
 end
@@ -98,6 +99,7 @@ function M.expand_all()
 		return session.fail({ message = "Open the workspace explorer before expanding it." })
 	end
 	view.selected(context.tree)
+	view.invalidate()
 	context.tree:expand_all(session.fail)
 end
 
@@ -106,6 +108,7 @@ function M.collapse_all()
 		return session.fail({ message = "Open the workspace explorer before collapsing it." })
 	end
 	view.selected(context.tree)
+	view.invalidate()
 	context.tree:collapse_all()
 end
 
@@ -121,6 +124,7 @@ function M.activate()
 	end
 	if context.tree:is_expandable(id) then
 		if context.tree.expanded[id] then
+			view.invalidate()
 			context.tree:collapse(id)
 		else
 			context.tree:expand(id, session.fail)

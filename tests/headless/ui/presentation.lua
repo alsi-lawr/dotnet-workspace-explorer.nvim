@@ -71,6 +71,7 @@ local nodes = {
 }
 
 local selected_id = "file"
+local metadata = {}
 
 local tree = {
 	nodes = nodes,
@@ -90,7 +91,11 @@ function tree:get_node(id)
 	return self.nodes[id]
 end
 
-function tree:is_expandable(id)
+function tree:presentation_node(id)
+	return self:get_node(id)
+end
+
+function tree.is_expandable(_, id)
 	return id == "workspace"
 end
 
@@ -98,7 +103,20 @@ function tree:children_of(id)
 	return self.children[id]
 end
 
-function tree:select(id)
+function tree:presentation_children_of(id)
+	return self:children_of(id)
+end
+
+function tree:presentation_metadata(id)
+	return metadata[id]
+		or {
+			loading = false,
+			provisional = false,
+			actionable = self.nodes[id] ~= nil,
+		}
+end
+
+function tree.select(_, id)
 	selected_id = id
 end
 
@@ -260,6 +278,41 @@ local ok, err = xpcall(function()
 	)
 
 	assert_equal("file", selected_id, "rendering should preserve semantic selection")
+
+	metadata.workspace = {
+		loading = true,
+		provisional = false,
+		actionable = true,
+		parent_id = "workspace",
+	}
+	metadata.file = {
+		loading = true,
+		provisional = true,
+		actionable = false,
+		parent_id = "workspace",
+	}
+	tree.marks.file = true
+	tree.decorations.file = { "unstaged" }
+	capture_highlights()
+	renderer.tree(state, tree)
+	local staged_groups = groups()
+	assert_contains(
+		staged_groups,
+		"DotnetWorkspaceExplorerLoading",
+		"the canonical loading parent uses its loading highlight"
+	)
+	assert_contains(
+		staged_groups,
+		"DotnetWorkspaceExplorerProvisional",
+		"provisional rows use their read-only highlight"
+	)
+	assert_equal(
+		{ "W Example.slnx (loading)", "  C Program.cs (provisional, read-only)" },
+		vim.api.nvim_buf_get_lines(buffer, 0, -1, false),
+		"staged presentation explicitly distinguishes loading and provisional rows"
+	)
+	assert_equal(false, state.rows[2].actionable, "a provisional render row is non-actionable")
+	assert_equal(nil, state.rows[2].sign, "a provisional render row has no canonical sign")
 end, debug.traceback)
 
 cleanup()

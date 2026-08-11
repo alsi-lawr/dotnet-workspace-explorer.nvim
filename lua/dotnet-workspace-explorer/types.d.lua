@@ -262,6 +262,10 @@
 ---@field ancestors string[]
 ---@field highlights DweHighlightSpan[]
 ---@field sign? DweSign
+---@field loading boolean
+---@field provisional boolean
+---@field actionable boolean
+---@field parent_id? DweNodeId
 
 ---@class DweViewSnapshot
 ---@field selected? string

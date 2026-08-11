@@ -65,6 +65,7 @@ end
 ---@field git_states fun(item: DweNode|DweSelectorEntry, id: string): DweGitState[]?
 ---@field sign fun(item: DweNode|DweSelectorEntry, id: string): DweSign?
 ---@field select fun(id: string)
+---@field metadata? fun(id: string): DwePresentationMetadata
 ---@field empty_line? string
 ---@field good? boolean
 
@@ -87,7 +88,9 @@ local function render(state, source, restoration)
 		if not item then
 			return
 		end
-		local expandable = source.is_expandable(id)
+		local metadata = source.metadata and source.metadata(id)
+			or { loading = false, provisional = false, actionable = true }
+		local expandable = metadata.actionable and source.is_expandable(id)
 		local disclosure = expandable and (source.expanded[id] and glyphs.open or glyphs.closed)
 			or glyphs.leaf
 		local kind = presentation.kinds[item.kind] or presentation.kinds.projectFile
@@ -113,21 +116,41 @@ local function render(state, source, restoration)
 				icon_start + #icon
 			)
 		end
-		prefix =
-			presentation.append_git(prefix, highlights, source.git_states(item, id), icon ~= "")
+		prefix = presentation.append_git(
+			prefix,
+			highlights,
+			metadata.actionable and source.git_states(item, id) or nil,
+			icon ~= ""
+		)
 		local name_start = #prefix
-		lines[#lines + 1] = prefix .. name
+		local suffix = metadata.provisional and " (provisional, read-only)"
+			or (metadata.loading and " (loading)")
+			or ""
+		lines[#lines + 1] = prefix .. name .. suffix
 		highlights[#highlights + 1] = presentation.span(
-			"DotnetWorkspaceExplorer" .. kind.group,
+			metadata.provisional and "DotnetWorkspaceExplorerProvisional"
+				or ("DotnetWorkspaceExplorer" .. kind.group),
 			name_start,
 			name_start + #name
 		)
+		if suffix ~= "" then
+			highlights[#highlights + 1] = presentation.span(
+				metadata.provisional and "DotnetWorkspaceExplorerProvisional"
+					or "DotnetWorkspaceExplorerLoading",
+				name_start + #name,
+				name_start + #name + #suffix
+			)
+		end
 		rows[#rows + 1] = {
 			id = id,
 			depth = depth,
 			ancestors = parents,
 			highlights = highlights,
-			sign = source.sign(item, id),
+			sign = metadata.actionable and source.sign(item, id) or nil,
+			loading = metadata.loading,
+			provisional = metadata.provisional,
+			actionable = metadata.actionable,
+			parent_id = metadata.parent_id,
 		}
 		by_id[id] = #rows
 		if source.expanded[id] then
@@ -167,7 +190,7 @@ local function render(state, source, restoration)
 			vim.api.nvim_win_set_width(state.win, snapshot.width)
 		end
 	end
-	if rows[row] then
+	if rows[row] and rows[row].actionable ~= false then
 		source.select(rows[row].id)
 	end
 	if restoration and window.valid("win", restoration.focus) then
@@ -184,13 +207,16 @@ function M.tree(state, tree, restoration)
 		roots = tree.roots,
 		selected_id = tree.selected_id,
 		get = function(id)
-			return tree:get_node(id)
+			return tree:presentation_node(id)
 		end,
 		is_expandable = function(id)
 			return tree:is_expandable(id)
 		end,
 		children_of = function(id)
-			return tree:children_of(id)
+			return tree:presentation_children_of(id)
+		end,
+		metadata = function(id)
+			return tree:presentation_metadata(id)
 		end,
 		expanded = tree.expanded,
 		git_states = function(_, id)

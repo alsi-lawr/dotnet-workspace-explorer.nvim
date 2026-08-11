@@ -21,6 +21,7 @@ M.fail = fail
 ---@param resolved string
 ---@param retain_tree? boolean
 function M.start(resolved, retain_tree)
+	view.invalidate()
 	if context.selector then
 		context.selector:invalidate(true)
 	end
@@ -45,6 +46,7 @@ function M.start(resolved, retain_tree)
 	if context.tree then
 		context.tree:stop("session_replaced", true)
 	end
+	view.invalidate()
 	context.target, context.initial_failed, context.terminal_failed = resolved, false, false
 	if not retain_tree then
 		context.has_good = false
@@ -66,7 +68,7 @@ function M.start(resolved, retain_tree)
 					current_selector:workspace_changed(state.revision)
 					return
 				end
-				view.render(state)
+				view.schedule(state)
 				if current_git then
 					current_git:start()
 					if git_after_revision and state.revision >= git_after_revision then
@@ -270,6 +272,7 @@ function M.refresh()
 	if not context.tree then
 		return view.failure({ message = "Open the workspace explorer before refreshing." })
 	end
+	view.invalidate()
 	if context.selector and context.selector:is_engaged() then
 		context.selector:cancel()
 	end

@@ -168,6 +168,29 @@ assert_equal(
 	"Dependencies did not use the resolved project"
 )
 
+local selector_race_callback
+local selector_race_tree = resolving_tree("dependencies", function(_, _, callback)
+	selector_race_callback = callback
+end)
+reset_context(selector_race_tree, root_target)
+before = #terminal_calls
+public.packages()
+context.selector = {
+	is_engaged = function()
+		return true
+	end,
+}
+selector_race_callback(nil, {
+	revision = 7,
+	targetNodeId = "project",
+	path = project_path,
+})
+assert_no_new_terminal(before, "selector engaged during resolution reached the terminal owner")
+assert(
+	notifications[#notifications].message:find("Close Add Existing", 1, true),
+	"callback-time selector rejection was not actionable"
+)
+
 local selector_tree = basic_tree("root", { root = node("root", "workspace") })
 reset_context(selector_tree, root_target)
 context.selector = {

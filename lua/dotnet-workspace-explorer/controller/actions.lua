@@ -5,6 +5,15 @@ local view = require("dotnet-workspace-explorer.ui.view")
 
 local M = {}
 
+---@return boolean
+local function selector_blocks_packages()
+	if not (context.selector and context.selector:is_engaged()) then
+		return false
+	end
+	session.fail({ message = "Close Add Existing before opening Package Explorer." })
+	return true
+end
+
 ---@param target unknown
 ---@return true?, string?
 local function launch_packages(target)
@@ -30,6 +39,9 @@ local function launch_project_packages(tree, project_id)
 		end
 		if err then
 			return session.fail(err)
+		end
+		if selector_blocks_packages() then
+			return
 		end
 		launch_packages(path)
 	end)
@@ -217,8 +229,8 @@ function M.packages(requested)
 	if requested ~= nil then
 		return launch_packages(requested)
 	end
-	if context.selector and context.selector:is_engaged() then
-		return session.fail({ message = "Close Add Existing before opening Package Explorer." })
+	if selector_blocks_packages() then
+		return
 	end
 
 	local tree = context.tree

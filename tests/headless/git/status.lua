@@ -6,7 +6,11 @@ local rpc = require("dotnet-workspace-explorer.rpc")
 local function assert_equal(expected, actual, message)
 	if not vim.deep_equal(expected, actual) then
 		error(
-			("%s\nexpected: %s\nactual: %s"):format(message, vim.inspect(expected), vim.inspect(actual))
+			("%s\nexpected: %s\nactual: %s"):format(
+				message,
+				vim.inspect(expected),
+				vim.inspect(actual)
+			)
 		)
 	end
 end
@@ -98,7 +102,10 @@ scenario(
 
 		state.git:request()
 		state.workspace.revision = 8
-		state.callbacks[3](nil, result(2, { { nodeId = "file", states = { "untracked" } } }, true, 7))
+		state.callbacks[3](
+			nil,
+			result(2, { { nodeId = "file", states = { "untracked" } } }, true, 7)
+		)
 		assert_equal(
 			{ "staged", "unstaged", "renamed", "deleted" },
 			state.workspace.decorations.file,
@@ -107,14 +114,22 @@ scenario(
 
 		state.git:request()
 		state.callbacks[4](nil, result(3, {}, false, 8))
-		assert_equal({}, state.workspace.decorations, "newer unavailable snapshot clears decorations")
+		assert_equal(
+			{},
+			state.workspace.decorations,
+			"newer unavailable snapshot clears decorations"
+		)
 
 		state.git:request()
 		state.callbacks[5](
 			nil,
 			result(4, { { nodeId = "file", states = { "unstaged", "staged" } } }, true, 8)
 		)
-		assert_equal("incompatible_git_status", state.errors[1].code, "invalid ordered states reject")
+		assert_equal(
+			"incompatible_git_status",
+			state.errors[1].code,
+			"invalid ordered states reject"
+		)
 
 		state.git:disable(true)
 		assert_equal({}, state.workspace.decorations, "disable clears decorations")
@@ -133,7 +148,11 @@ scenario("Git status accepts additive response fields but requires revision iden
 	})
 	response.additiveResponseField = { future = true }
 	state.callbacks[1](nil, response)
-	assert_equal({ file = { "staged" } }, state.workspace.decorations, "additive fields are ignored")
+	assert_equal(
+		{ file = { "staged" } },
+		state.workspace.decorations,
+		"additive fields are ignored"
+	)
 
 	state.git:request()
 	response = result(2, { { nodeId = "file", states = { "unstaged" } } })

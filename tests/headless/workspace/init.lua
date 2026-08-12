@@ -3,7 +3,11 @@ vim.opt.runtimepath:prepend(vim.fn.getcwd())
 local function assert_equal(expected, actual, message)
 	if not vim.deep_equal(expected, actual) then
 		error(
-			("%s\nexpected: %s\nactual: %s"):format(message, vim.inspect(expected), vim.inspect(actual))
+			("%s\nexpected: %s\nactual: %s"):format(
+				message,
+				vim.inspect(expected),
+				vim.inspect(actual)
+			)
 		)
 	end
 end

@@ -6,7 +6,11 @@ local rpc = require("dotnet-workspace-explorer.rpc")
 local function assert_equal(expected, actual, message)
 	if not vim.deep_equal(expected, actual) then
 		error(
-			("%s\nexpected: %s\nactual: %s"):format(message, vim.inspect(expected), vim.inspect(actual))
+			("%s\nexpected: %s\nactual: %s"):format(
+				message,
+				vim.inspect(expected),
+				vim.inspect(actual)
+			)
 		)
 	end
 end
@@ -95,7 +99,8 @@ local function harness(options)
 		return capabilities[name] == true
 	end
 	workspace.get_node = function(_, id)
-		return id == "selected-node" and { id = id, kind = options.target_kind or "projectFile" } or nil
+		return id == "selected-node" and { id = id, kind = options.target_kind or "projectFile" }
+			or nil
 	end
 	workspace.request = function(_, method, parameters, callback)
 		calls[#calls + 1] = { method = method, parameters = vim.deepcopy(parameters) }
@@ -408,7 +413,11 @@ end
 -- Operation-backed Create waits for and reconciles only its matching completion.
 do
 	local state = run({ pick = 2, name = "IThing" })
-	assert_equal(nil, state.metrics.refresh_revision, "operation-backed Create waits for completion")
+	assert_equal(
+		nil,
+		state.metrics.refresh_revision,
+		"operation-backed Create waits for completion"
+	)
 	state.controller:notification(
 		"workspace/operations/completed",
 		completion("different-operation", "succeeded")
@@ -429,7 +438,11 @@ do
 		completion("operation-1", "failed", { diagnostic("template_failed", "Core failed") })
 	)
 	assert_equal("template_failed", state.errors[1].code, "failed operation surfaces diagnostic")
-	assert_equal("Core failed", state.errors[1].message, "failed operation preserves server message")
+	assert_equal(
+		"Core failed",
+		state.errors[1].message,
+		"failed operation preserves server message"
+	)
 	assert_equal(nil, state.metrics.refresh_revision, "failed operation does not reconcile")
 end
 

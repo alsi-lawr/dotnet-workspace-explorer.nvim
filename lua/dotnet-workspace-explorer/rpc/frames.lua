@@ -14,7 +14,9 @@ function M.write(self, frame)
 		return false
 	end
 	if self.limits and #encoded > self.limits.maxFrameBytes then
-		self:_terminate(message.problem("frame_too_large", "The request exceeds the negotiated frame limit."))
+		self:_terminate(
+			message.problem("frame_too_large", "The request exceeds the negotiated frame limit.")
+		)
 		return false
 	end
 	local wrote, write_error = pcall(self.process.write, self.process, encoded)
@@ -35,7 +37,9 @@ function M.dispatch(self, frame)
 	if frame[1] == 1 and #frame == 4 and validation.request_id(frame[2]) then
 		local callback = self.pending[frame[2]]
 		if callback == nil then
-			return self:_terminate(message.problem("unmatched_response", "Received an unmatched response ID."))
+			return self:_terminate(
+				message.problem("unmatched_response", "Received an unmatched response ID.")
+			)
 		end
 		self.pending[frame[2]] = nil
 		local rpc_error = frame[3]
@@ -47,7 +51,9 @@ function M.dispatch(self, frame)
 				or type(rpc_error.message) ~= "string"
 			)
 		then
-			return self:_terminate(message.problem("invalid_frame", "A response error is malformed."))
+			return self:_terminate(
+				message.problem("invalid_frame", "A response error is malformed.")
+			)
 		end
 		self:_deliver(callback, rpc_error ~= vim.NIL and rpc_error or nil, frame[4])
 	elseif
@@ -64,7 +70,9 @@ function M.dispatch(self, frame)
 			end
 		end)
 	else
-		self:_terminate(message.problem("invalid_frame", "Received a malformed or unexpected RPC frame."))
+		self:_terminate(
+			message.problem("invalid_frame", "Received a malformed or unexpected RPC frame.")
+		)
 	end
 end
 
@@ -88,7 +96,10 @@ function M.stdout(self, captured, read_error, data)
 		local ok, frame, next_position = pcall(self.unpacker, data, position)
 		if not ok or type(next_position) ~= "number" or next_position <= position then
 			return self:_terminate(
-				message.problem("decode_failed", ok and "Invalid decoder position." or tostring(frame))
+				message.problem(
+					"decode_failed",
+					ok and "Invalid decoder position." or tostring(frame)
+				)
 			)
 		end
 		position = next_position

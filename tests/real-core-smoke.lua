@@ -445,7 +445,8 @@ explorer.mark_copy()
 select_matching("Actions")
 explorer.place()
 wait_for(function()
-	return vim.fn.filereadable(fixture_root .. "/src/Studio.CSharp/Actions/BootstrapRenamed.cs") == 1
+	return vim.fn.filereadable(fixture_root .. "/src/Studio.CSharp/Actions/BootstrapRenamed.cs")
+		== 1
 end, "Copy Place did not complete")
 
 wait_for(function()

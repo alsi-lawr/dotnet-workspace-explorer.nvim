@@ -5,7 +5,11 @@ local EditingOperations = require("dotnet-workspace-explorer.operations.editing"
 local function assert_equal(expected, actual, message)
 	if not vim.deep_equal(expected, actual) then
 		error(
-			("%s\nexpected: %s\nactual: %s"):format(message, vim.inspect(expected), vim.inspect(actual))
+			("%s\nexpected: %s\nactual: %s"):format(
+				message,
+				vim.inspect(expected),
+				vim.inspect(actual)
+			)
 		)
 	end
 end
@@ -261,7 +265,11 @@ do
 	state.editing:toggle("copy")
 	state.select("destination")
 	state.editing:place()
-	assert_equal(nil, request(state, "workspace/commands/execute"), "cancelled Copy does not execute")
+	assert_equal(
+		nil,
+		request(state, "workspace/commands/execute"),
+		"cancelled Copy does not execute"
+	)
 	assert_equal(nil, state.metrics.success_revision, "cancelled Copy does not reconcile")
 	options.confirm = true
 	state.editing:place()

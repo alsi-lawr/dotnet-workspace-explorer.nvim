@@ -8,7 +8,11 @@ local Workspace = require("dotnet-workspace-explorer.workspace").Workspace
 local function assert_equal(expected, actual, message)
 	if not vim.deep_equal(expected, actual) then
 		error(
-			("%s\nexpected: %s\nactual: %s"):format(message, vim.inspect(expected), vim.inspect(actual))
+			("%s\nexpected: %s\nactual: %s"):format(
+				message,
+				vim.inspect(expected),
+				vim.inspect(actual)
+			)
 		)
 	end
 end
@@ -275,7 +279,8 @@ scenario("directory-expansion-and-cached-collapse", function()
 	local state = harness({
 		request = function(method, parameters, callback)
 			if
-				method == "workspace/addExisting/children" and parameters.parentEntryId == "directory-1"
+				method == "workspace/addExisting/children"
+				and parameters.parentEntryId == "directory-1"
 			then
 				if parameters.continuationToken == nil then
 					callback(nil, {
@@ -340,7 +345,11 @@ scenario("confirmation-rejection-and-cancellation", function()
 	state.selector:confirm()
 	vim.ui.input = original_input
 
-	assert_equal(nil, calls_for(state, "workspace/commands/execute")[1], "rejection does not execute")
+	assert_equal(
+		nil,
+		calls_for(state, "workspace/commands/execute")[1],
+		"rejection does not execute"
+	)
 	assert_equal(true, state.selector:is_active(), "rejection leaves the selector available")
 	state.selector:cancel()
 	assert_equal({
@@ -354,7 +363,8 @@ scenario("late-callbacks-and-stale-revisions-stay-inert", function()
 	local children = harness({
 		request = function(method, parameters, callback)
 			if
-				method == "workspace/addExisting/children" and parameters.parentEntryId == "directory-1"
+				method == "workspace/addExisting/children"
+				and parameters.parentEntryId == "directory-1"
 			then
 				pending_children = callback
 				return true
@@ -405,7 +415,11 @@ scenario("capability-variants", function()
 	local unsupported = harness({ capability = false })
 	unsupported.start()
 	assert_equal(nil, unsupported.calls[1], "unsupported selector sends no request")
-	assert_equal("unsupported_capability", unsupported.errors[1].code, "missing selector capability")
+	assert_equal(
+		"unsupported_capability",
+		unsupported.errors[1].code,
+		"missing selector capability"
+	)
 
 	local original_input = vim.ui.input
 	vim.ui.input = function(_, callback)
@@ -448,7 +462,8 @@ scenario("capability-variants", function()
 				)
 				return true
 			elseif
-				method == "workspace/addExisting/children" and parameters.parentEntryId == "directory-1"
+				method == "workspace/addExisting/children"
+				and parameters.parentEntryId == "directory-1"
 			then
 				callback(nil, {
 					revision = 7,
@@ -551,7 +566,8 @@ scenario("critical-response-identity-remains-required", function()
 	local wrong_parent = harness({
 		request = function(method, parameters, callback)
 			if
-				method == "workspace/addExisting/children" and parameters.parentEntryId == "directory-1"
+				method == "workspace/addExisting/children"
+				and parameters.parentEntryId == "directory-1"
 			then
 				callback(nil, {
 					revision = 7,

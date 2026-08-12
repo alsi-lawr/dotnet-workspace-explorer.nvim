@@ -128,6 +128,11 @@ local target = "/tmp/project with spaces;$(not-a-shell).fsproj"
 assert(terminal.open({ "fake-package-explorer", target }, target), "initial terminal launch failed")
 assert_equal(1, #launches, "initial launch count")
 assert_equal({ "fake-package-explorer", target }, launches[1].argv, "exact argv")
+assert_equal(
+	{ DOTNET_PACKAGE_EXPLORER_EMBEDDED = "1" },
+	launches[1].options.env,
+	"embedded environment marker"
+)
 assert_equal(true, launches[1].options.term, "terminal PTY option")
 local first_buf = launches[1].buf
 local first_win = vim.api.nvim_get_current_win()
@@ -328,6 +333,7 @@ if [ ! -t 0 ] || [ ! -t 1 ]; then
   exit 71
 fi
 printf 'DWE_TTY_ARGV|%s|%s\n' "$#" "$1" > "$1"
+printf 'DWE_EMBEDDED|%s\n' "$DOTNET_PACKAGE_EXPLORER_EMBEDDED" >> "$1"
 export DWE_REPORT="$1"
 exec nvim -u NONE -i NONE --noplugin \
   --cmd 'set noswapfile' \
@@ -348,6 +354,12 @@ assert(
 		return file_text(real_target):find("DWE_TTY_ARGV|1|" .. real_target, 1, true) ~= nil
 	end),
 	"terminal child did not observe TTY stdin/stdout and one exact target argument"
+)
+assert(
+	vim.wait(2000, function()
+		return file_text(real_target):find("DWE_EMBEDDED|1", 1, true) ~= nil
+	end),
+	"terminal child did not receive the embedded environment marker"
 )
 assert(
 	vim.wait(2000, function()

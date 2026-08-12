@@ -232,6 +232,7 @@ function M.open(argv, target)
 
 	local started, job_or_error = pcall(vim.api.nvim_buf_call, active.buf, function()
 		return vim.fn.jobstart(argv, {
+			env = { DOTNET_PACKAGE_EXPLORER_EMBEDDED = "1" },
 			term = true,
 			on_stdout = function(_, data)
 				observe_output(active, data)

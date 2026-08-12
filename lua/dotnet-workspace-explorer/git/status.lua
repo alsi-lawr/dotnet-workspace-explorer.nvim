@@ -4,8 +4,7 @@ local M = {}
 local GitStatus = {}
 GitStatus.__index = GitStatus
 
-local legacy_capability = "workspace.git.status"
-local version_two_capability = "workspace.git.status.v2"
+local capability = "workspace.git.status"
 
 ---@class DweGitStatusOptions
 ---@field workspace DweWorkspaceTree
@@ -36,12 +35,7 @@ function GitStatus:_live()
 end
 
 function GitStatus:_capable()
-	return self.workspace:has_capability(version_two_capability)
-		or self.workspace:has_capability(legacy_capability)
-end
-
-function GitStatus:_version_two()
-	return self.workspace:has_capability(version_two_capability)
+	return self.workspace:has_capability(capability)
 end
 
 ---@param render boolean
@@ -88,7 +82,7 @@ function GitStatus:request()
 				return
 			end
 			self.inflight = false
-			local decorations = not err and protocol.snapshot(result, self:_version_two()) or nil
+			local decorations = not err and protocol.snapshot(result) or nil
 			if err then
 				self.on_error(err)
 			elseif not decorations then

@@ -39,7 +39,7 @@ nvim -u NONE -i NONE --noplugin --headless \
 nvim -u NONE -i NONE --noplugin --headless \
   --cmd "set runtimepath^=$PWD" -l tests/headless/editing.lua
 nvim -u NONE -i NONE --noplugin --headless \
-  --cmd "set runtimepath^=$PWD" -l tests/headless/git.lua
+  --cmd "set runtimepath^=$PWD" -l tests/headless/git/status.lua
 nvim -u NONE -i NONE --noplugin --headless \
   --cmd "set runtimepath^=$PWD" -l tests/headless/tree-actions.lua
 nvim -u NONE -i NONE --noplugin --headless \
@@ -73,8 +73,9 @@ nvim -u NONE -i NONE --noplugin --headless \
 
 - Keep transport and generation safety in `rpc.lua`, normalized tree state in `workspace.lua`,
   New/Delete orchestration in `mutations.lua`, transient Add Existing state in `selector.lua`,
-  rename/move/copy orchestration in `editing.lua`, event-driven Git status in `git.lua`, public
-  lifecycle actions in `init.lua`, configuration in `config.lua`, and presentation in `view.lua`.
+  rename/move/copy orchestration in `editing.lua`, event-driven Git status in `git/status.lua`,
+  public lifecycle actions in `init.lua`, configuration in `config.lua`, and presentation in
+  `view.lua`.
 - Preserve the core as the authority for solution state and writes. Lua must not infer workspace
   paths or edit project files directly.
 - Expose user actions as commands before adding buffer-local convenience mappings.

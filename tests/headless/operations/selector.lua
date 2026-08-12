@@ -1,9 +1,9 @@
 vim.opt.runtimepath:prepend(vim.fn.getcwd())
 
 local config = require("dotnet-workspace-explorer.config")
-local AddExistingSelector = require("dotnet-workspace-explorer.operations.selector").Selector
+local AddExistingSelector = require("dotnet-workspace-explorer.operations.selector.init").Selector
 local view = require("dotnet-workspace-explorer.ui.view")
-local Workspace = require("dotnet-workspace-explorer.workspace").Workspace
+local Workspace = require("dotnet-workspace-explorer.workspace.init").Workspace
 
 local function assert_equal(expected, actual, message)
 	if not vim.deep_equal(expected, actual) then
@@ -722,7 +722,8 @@ end)
 scenario("selector-mode-action-routing", function()
 	local EditingOperations = require("dotnet-workspace-explorer.operations.editing").Editing
 	local MutationOperations = require("dotnet-workspace-explorer.operations.mutations").Mutations
-	local SelectorOperations = require("dotnet-workspace-explorer.operations.selector").Selector
+	local SelectorOperations =
+		require("dotnet-workspace-explorer.operations.selector.init").Selector
 	local originals = {
 		workspace = Workspace.new,
 		editing = EditingOperations.new,

@@ -18,10 +18,7 @@ local workspace = {
 	"workspace.operations.completed",
 }
 
-local git = {
-	"workspace.git.status",
-	"workspace.git.status.v2",
-}
+local git = "workspace.git.status"
 
 local by_method = {
 	["workspace/root"] = "workspace.root",
@@ -45,7 +42,7 @@ local by_method = {
 function M.requested(git_enabled)
 	local result = vim.deepcopy(workspace)
 	if git_enabled then
-		vim.list_extend(result, git)
+		result[#result + 1] = git
 	end
 	return result
 end

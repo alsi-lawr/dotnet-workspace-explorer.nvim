@@ -40,15 +40,4 @@ function M.normalize(value, allow_empty)
 	return normalized
 end
 
----Maps the legacy single-state protocol onto the v2 state model.
----@param state unknown
----@return DweGitState[]?
-function M.legacy(state)
-	if state == "added" then
-		return { "untracked" }
-	elseif state == "changed" then
-		return { "unstaged" }
-	end
-end
-
 return M

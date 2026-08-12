@@ -40,7 +40,7 @@ assembly versions, and Git state across C#, F#, and Visual Basic.
 ## Requirements
 
 - Neovim 0.12 or newer
-- [`dotnet-we` 0.4.0 or newer](https://github.com/alsi-lawr/dotnet-workspace-explorer)
+- [`dotnet-we` 0.5.0 or newer](https://github.com/alsi-lawr/dotnet-workspace-explorer)
 - [`dotnet-pe` 0.2.1 or newer](https://github.com/alsi-lawr/dotnet-package-explorer)
 - [`nvim-web-devicons`](https://github.com/nvim-tree/nvim-web-devicons), if you want file icons
 
@@ -121,6 +121,7 @@ Actions are also available as commands, so every mapping can be changed or remov
 
 - See solution folders and project structure rather than a flat file tree.
 - Inspect project, package, framework, assembly, and project-reference dependencies.
+- See complete ordered Git states for files and their semantic containers.
 - Keep the current selection and expanded branches while the workspace changes.
 - Use the same explorer across C#, F#, and Visual Basic solutions.
 

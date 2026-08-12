@@ -5,9 +5,8 @@ local M = {}
 
 ---Validates a Git status snapshot and returns decorations keyed by node ID.
 ---@param result unknown
----@param version_two boolean
 ---@return table<DweNodeId, DweGitState[]>?
-function M.snapshot(result, version_two)
+function M.snapshot(result)
 	if
 		not value.is_map(result)
 		or type(result.available) ~= "boolean"
@@ -24,8 +23,7 @@ function M.snapshot(result, version_two)
 		if not value.is_map(decoration) then
 			return nil
 		end
-		local normalized = version_two and states.normalize(decoration.states, false)
-			or states.legacy(decoration.state)
+		local normalized = states.normalize(decoration.states, false)
 		if
 			not value.is_nonempty_string(decoration.nodeId)
 			or not normalized

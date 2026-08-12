@@ -32,7 +32,7 @@ local function result(status_revision, decorations, available, workspace_revisio
 end
 
 local function harness(capabilities)
-	capabilities = capabilities == nil and { ["workspace.git.status.v2"] = true } or capabilities
+	capabilities = capabilities == nil and { ["workspace.git.status"] = true } or capabilities
 	local calls, callbacks, errors = {}, {}, {}
 	local workspace = {
 		phase = "ready",
@@ -71,70 +71,56 @@ scenario("unnegotiated Git status installs no event source and sends no request"
 	assert_equal(nil, state.calls[1], "unnegotiated Git sends no status request")
 end)
 
-scenario(
-	"version two Git status preserves ordered multi-state decorations and freshness boundaries",
-	function()
-		local state = harness()
-		state.git:start()
-		assert_equal({
-			method = "workspace/git/status",
-			parameters = { expectedRevision = 7 },
-		}, state.calls[1], "open sends exact Git status request")
-		state.callbacks[1](
-			nil,
-			result(1, {
-				{ nodeId = "file", states = { "staged", "unstaged", "renamed", "deleted" } },
-				{ nodeId = "project", states = { "unmerged", "untracked", "ignored" } },
-			})
-		)
-		assert_equal({
-			file = { "staged", "unstaged", "renamed", "deleted" },
-			project = { "unmerged", "untracked", "ignored" },
-		}, state.workspace.decorations, "valid current snapshot applies every ordered state")
+scenario("Git status preserves ordered multi-state decorations and freshness boundaries", function()
+	local state = harness()
+	state.git:start()
+	assert_equal({
+		method = "workspace/git/status",
+		parameters = { expectedRevision = 7 },
+	}, state.calls[1], "open sends exact Git status request")
+	state.callbacks[1](
+		nil,
+		result(1, {
+			{ nodeId = "file", states = { "staged", "unstaged", "renamed", "deleted" } },
+			{ nodeId = "project", states = { "unmerged", "untracked", "ignored" } },
+		})
+	)
+	assert_equal({
+		file = { "staged", "unstaged", "renamed", "deleted" },
+		project = { "unmerged", "untracked", "ignored" },
+	}, state.workspace.decorations, "valid current snapshot applies every ordered state")
 
-		state.git:request()
-		state.callbacks[2](nil, result(1, { { nodeId = "file", states = { "untracked" } } }))
-		assert_equal(
-			{ "staged", "unstaged", "renamed", "deleted" },
-			state.workspace.decorations.file,
-			"duplicate status revision is ignored"
-		)
+	state.git:request()
+	state.callbacks[2](nil, result(1, { { nodeId = "file", states = { "untracked" } } }))
+	assert_equal(
+		{ "staged", "unstaged", "renamed", "deleted" },
+		state.workspace.decorations.file,
+		"duplicate status revision is ignored"
+	)
 
-		state.git:request()
-		state.workspace.revision = 8
-		state.callbacks[3](
-			nil,
-			result(2, { { nodeId = "file", states = { "untracked" } } }, true, 7)
-		)
-		assert_equal(
-			{ "staged", "unstaged", "renamed", "deleted" },
-			state.workspace.decorations.file,
-			"response for a replaced workspace revision is ignored"
-		)
+	state.git:request()
+	state.workspace.revision = 8
+	state.callbacks[3](nil, result(2, { { nodeId = "file", states = { "untracked" } } }, true, 7))
+	assert_equal(
+		{ "staged", "unstaged", "renamed", "deleted" },
+		state.workspace.decorations.file,
+		"response for a replaced workspace revision is ignored"
+	)
 
-		state.git:request()
-		state.callbacks[4](nil, result(3, {}, false, 8))
-		assert_equal(
-			{},
-			state.workspace.decorations,
-			"newer unavailable snapshot clears decorations"
-		)
+	state.git:request()
+	state.callbacks[4](nil, result(3, {}, false, 8))
+	assert_equal({}, state.workspace.decorations, "newer unavailable snapshot clears decorations")
 
-		state.git:request()
-		state.callbacks[5](
-			nil,
-			result(4, { { nodeId = "file", states = { "unstaged", "staged" } } }, true, 8)
-		)
-		assert_equal(
-			"incompatible_git_status",
-			state.errors[1].code,
-			"invalid ordered states reject"
-		)
+	state.git:request()
+	state.callbacks[5](
+		nil,
+		result(4, { { nodeId = "file", states = { "unstaged", "staged" } } }, true, 8)
+	)
+	assert_equal("incompatible_git_status", state.errors[1].code, "invalid ordered states reject")
 
-		state.git:disable(true)
-		assert_equal({}, state.workspace.decorations, "disable clears decorations")
-	end
-)
+	state.git:disable(true)
+	assert_equal({}, state.workspace.decorations, "disable clears decorations")
+end)
 
 scenario("Git status accepts additive response fields but requires revision identity", function()
 	local state = harness()
@@ -167,35 +153,15 @@ scenario("Git status accepts additive response fields but requires revision iden
 	state.git:disable(false)
 end)
 
-scenario("legacy Git status maps added and changed into the full presentation model", function()
-	local state = harness({ ["workspace.git.status"] = true })
-	state.git:start()
-	state.callbacks[1](
-		nil,
-		result(1, {
-			{ nodeId = "added", state = "added" },
-			{ nodeId = "changed", state = "changed" },
-		})
-	)
-	assert_equal({
-		added = { "untracked" },
-		changed = { "unstaged" },
-	}, state.workspace.decorations, "legacy states map to v2 presentation states")
-	state.git:disable(false)
-end)
-
-scenario("version two shape takes precedence when both Git capabilities are negotiated", function()
-	local state = harness({
-		["workspace.git.status"] = true,
-		["workspace.git.status.v2"] = true,
-	})
+scenario("Git status rejects a singular state decoration", function()
+	local state = harness()
 	state.git:start()
 	state.callbacks[1](nil, result(1, { { nodeId = "file", state = "added" } }))
-	assert_equal("incompatible_git_status", state.errors[1].code, "legacy shape rejects under v2")
+	assert_equal("incompatible_git_status", state.errors[1].code, "singular state rejects")
 	state.git:disable(false)
 end)
 
-scenario("version two only negotiation authorizes the shared Git status method", function()
+scenario("canonical negotiation authorizes the Git status method", function()
 	local frames, started, response_error, response = {}, false
 	local client = rpc.Client.new({
 		command = "unused",
@@ -216,7 +182,7 @@ scenario("version two only negotiation authorizes the shared Git status method",
 							{
 								protocolVersion = { major = 1, minor = 0 },
 								workspace = { id = "workspace-id", revision = 7 },
-								capabilities = { "workspace.git.status.v2" },
+								capabilities = { "workspace.git.status" },
 								limits = { maxFrameBytes = 65536, maxPageSize = 100 },
 							},
 						})
@@ -238,14 +204,20 @@ scenario("version two only negotiation authorizes the shared Git status method",
 		end,
 	})
 	client:start(function(err)
-		assert_equal(nil, err, "v2-only initialization")
+		assert_equal(nil, err, "Git status initialization")
 		started = true
 	end)
 	assert(
 		vim.wait(1000, function()
 			return started
 		end),
-		"v2-only initialization timed out"
+		"Git status initialization timed out"
+	)
+	local requested = frames[1][4].capabilities
+	assert_equal(
+		"workspace.git.status",
+		requested[#requested],
+		"initialization requests Git status"
 	)
 	client:request("workspace/git/status", { expectedRevision = 7 }, function(err, value)
 		response_error, response = err, value
@@ -254,11 +226,11 @@ scenario("version two only negotiation authorizes the shared Git status method",
 		vim.wait(1000, function()
 			return response ~= nil or response_error ~= nil
 		end),
-		"v2-only Git status timed out"
+		"Git status timed out"
 	)
-	assert_equal(nil, response_error, "v2-only Git status authorization")
-	assert_equal("workspace/git/status", frames[2][3], "shared Git status method is sent")
-	assert_equal({ "staged" }, response.decorations[1].states, "v2 response is delivered")
+	assert_equal(nil, response_error, "Git status authorization")
+	assert_equal("workspace/git/status", frames[2][3], "Git status method is sent")
+	assert_equal({ "staged" }, response.decorations[1].states, "Git status response is delivered")
 	client:stop("test_complete", true)
 end)
 

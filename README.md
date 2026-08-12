@@ -40,7 +40,8 @@ assembly versions, and Git state across C#, F#, and Visual Basic.
 ## Requirements
 
 - Neovim 0.12 or newer
-- [`dotnet-we` 0.2.0 or newer](https://github.com/alsi-lawr/dotnet-workspace-explorer)
+- [`dotnet-we` 0.4.0 or newer](https://github.com/alsi-lawr/dotnet-workspace-explorer)
+- [`dotnet-pe` 0.2.0 or newer](https://github.com/alsi-lawr/dotnet-package-explorer)
 - [`nvim-web-devicons`](https://github.com/nvim-tree/nvim-web-devicons), if you want file icons
 
 ## Install
@@ -49,12 +50,14 @@ Install the core with Nix:
 
 ```sh
 nix profile install github:alsi-lawr/dotnet-workspace-explorer
+nix profile install github:alsi-lawr/dotnet-package-explorer
 ```
 
 Or install it from NuGet:
 
 ```sh
 dotnet tool install --global ALSI.WorkspaceExplorer
+dotnet tool install --global ALSI.PackageExplorer
 ```
 
 Then install the plugin. With
@@ -76,8 +79,8 @@ Then install the plugin. With
 }
 ```
 
-The plugin starts `dotnet-we workspace <target> --pipe`. No extra command setting is needed when
-`dotnet-we` is on your `PATH`.
+The plugin starts `dotnet-we workspace <target> --pipe` for the solution explorer and `dotnet-pe`
+for the package explorer. No extra command settings are needed when both tools are on your `PATH`.
 
 ## Open a workspace
 
@@ -88,6 +91,13 @@ The plugin starts `dotnet-we workspace <target> --pipe`. No extra command settin
 
 Without a path, the explorer looks for a solution or project in the current directory.
 
+Open Package Explorer for the selected workspace, project, or Dependencies node with `P`. An
+explicit solution or project can be opened with:
+
+```vim
+:DotnetWorkspaceExplorerPackages /path/to/MyProject.csproj
+```
+
 ## Key actions
 
 | Key | Action |
@@ -95,6 +105,7 @@ Without a path, the explorer looks for a solution or project in the current dire
 | `<CR>` or `l` | Open or expand |
 | `h` | Collapse |
 | `a` | Add a file, directory, project, or solution item |
+| `P` | Open Package Explorer |
 | `e` | Open a project file |
 | `r` | Rename |
 | `m`, then `p` | Move and place |

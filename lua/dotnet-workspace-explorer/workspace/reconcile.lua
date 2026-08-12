@@ -49,11 +49,28 @@ end
 ---@param callback fun(error: DweProblem?, ids?: DweNodeId[], invalidated?: boolean)
 function M.snapshot_children(self, snapshot, id, captured, callback)
 	local collected, token, seen_tokens = {}, nil, {}
+	local settled = false
+	local function finish(...)
+		if settled then
+			return
+		end
+		settled = true
+		callback(...)
+	end
 	local function owner_is_current()
 		return captured.owner == nil or self.expansion_owner == captured.owner
 	end
+	local function owner_was_lost()
+		if owner_is_current() then
+			return false
+		end
+		if captured.owner_loss_invalidates then
+			finish(errors.stale(), nil, true)
+		end
+		return true
+	end
 	local function page()
-		if not owner_is_current() then
+		if owner_was_lost() then
 			return
 		end
 		local parameters = { parentNodeId = id, pageSize = self.client.limits.maxPageSize }
@@ -61,11 +78,11 @@ function M.snapshot_children(self, snapshot, id, captured, callback)
 			parameters.continuationToken = token
 		end
 		self.client:request("workspace/children", parameters, function(request_error, result)
-			if not owner_is_current() then
+			if owner_was_lost() then
 				return
 			end
 			if not self:_valid(captured.generation, captured.epoch, captured.workspace) then
-				return callback(errors.stale(), nil, true)
+				return finish(errors.stale(), nil, true)
 			end
 			if request_error then
 				if request_error.code == "workspace_conflict" then
@@ -73,9 +90,9 @@ function M.snapshot_children(self, snapshot, id, captured, callback)
 						return
 					end
 					self:_invalidate(captured.owner)
-					return callback(request_error, nil, true)
+					return finish(request_error, nil, true)
 				end
-				return callback(request_error)
+				return finish(request_error)
 			end
 			if
 				type(result) ~= "table"
@@ -88,7 +105,7 @@ function M.snapshot_children(self, snapshot, id, captured, callback)
 					return
 				end
 				self:_invalidate(captured.owner)
-				return callback(errors.stale(), nil, true)
+				return finish(errors.stale(), nil, true)
 			end
 			local next_token = result.nextToken
 			if next_token ~= nil then
@@ -96,7 +113,7 @@ function M.snapshot_children(self, snapshot, id, captured, callback)
 					local reason =
 						rpc.problem("invalid_tree", "The children continuation is invalid.")
 					self.client:_terminate(reason)
-					return callback(reason)
+					return finish(reason)
 				end
 			end
 			local nodes, ids =
@@ -105,7 +122,7 @@ function M.snapshot_children(self, snapshot, id, captured, callback)
 				local reason =
 					rpc.problem("invalid_tree", "The workspace children response is invalid.")
 				self.client:_terminate(reason)
-				return callback(reason)
+				return finish(reason)
 			end
 			for _, child in ipairs(nodes) do
 				snapshot.nodes[child.id] = child
@@ -122,7 +139,7 @@ function M.snapshot_children(self, snapshot, id, captured, callback)
 				seen_tokens[token] = true
 				return page()
 			end
-			callback(nil, snapshot.children[id])
+			finish(nil, snapshot.children[id])
 		end)
 	end
 	page()
@@ -189,7 +206,10 @@ end
 function M.restart_reconcile(self)
 	self.reconciling = false
 	if self.reconcile_queued and not self.reconciliation_deferred and not self.client.inert then
-		self:_reconcile()
+		return self:_reconcile()
+	end
+	if not self.reconcile_queued or self.client.inert then
+		self:_finish_reconcile(errors.stale())
 	end
 end
 
@@ -210,10 +230,14 @@ function M.reconcile(self, callback, retry)
 		epoch = self.epoch,
 		workspace = self.workspace_id,
 		owner = self.expansion_owner,
+		owner_loss_invalidates = true,
 	}
 	local expected_revision = self.revision
 	self.client:request("workspace/root", {}, function(request_error, result)
 		if not self:_valid(captured.generation, captured.epoch, captured.workspace) then
+			return self:_restart_reconcile()
+		end
+		if captured.owner and self.expansion_owner ~= captured.owner then
 			return self:_restart_reconcile()
 		end
 		if request_error then
@@ -276,6 +300,20 @@ function M.invalidate(self, retained_owner)
 end
 
 ---@param self table
+local function retry_expansion_after_invalidation(self)
+	local owner = self.expansion_owner
+	local had_overlay = owner.overlay ~= nil
+	owner.overlay = nil
+	self:_invalidate(owner)
+	if had_overlay then
+		self.on_change(self)
+	end
+	if staging.owns(self, owner) and owner.retry then
+		owner.retry()
+	end
+end
+
+---@param self table
 ---@param method string
 ---@param parameters table
 function M.notification(self, method, parameters)
@@ -286,7 +324,7 @@ function M.notification(self, method, parameters)
 			self.deferred_reconciliation = true
 			self.on_notification(method, parameters)
 		elseif self.expansion_owner then
-			self:_invalidate()
+			retry_expansion_after_invalidation(self)
 		elseif staging.has_active(self) then
 			if
 				staging.can_retain_reflected(self, parameters)
@@ -308,6 +346,8 @@ function M.notification(self, method, parameters)
 			staging.preempt_owner(self, errors.stale())
 			self.deferred_reconciliation = true
 			self.on_notification(method, parameters)
+		elseif self.expansion_owner then
+			retry_expansion_after_invalidation(self)
 		else
 			self:_invalidate()
 		end

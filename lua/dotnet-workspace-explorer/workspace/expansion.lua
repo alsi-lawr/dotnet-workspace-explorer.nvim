@@ -192,7 +192,12 @@ function M.expand_all(self, callback)
 		end
 	end
 	local expected_revision = self.revision
+	local retrying = false
 	local function retry_after_reconcile()
+		if settled or retrying then
+			return
+		end
+		retrying = true
 		if
 			self.client.generation ~= captured.generation
 			or self.client.inert
@@ -202,6 +207,9 @@ function M.expand_all(self, callback)
 			return finish(errors.stale())
 		end
 		local function resume(err)
+			if settled then
+				return
+			end
 			if err then
 				return finish(err)
 			end
@@ -219,13 +227,27 @@ function M.expand_all(self, callback)
 			resume()
 		end
 	end
+	owner.retry = retry_after_reconcile
 
 	self.client:request("workspace/root", {}, function(request_error, result)
+		if settled then
+			return
+		end
+		if not owns_snapshot() then
+			if retrying then
+				return
+			end
+			return finish(errors.stale())
+		end
 		if
-			not owns_snapshot()
-			or not self:_valid(captured.generation, captured.epoch, captured.workspace)
+			self.client.generation ~= captured.generation
+			or self.client.inert
+			or self.workspace_id ~= captured.workspace
 		then
 			return finish(errors.stale())
+		end
+		if self.epoch ~= captured.epoch then
+			return retry_after_reconcile()
 		end
 		if request_error then
 			return finish(request_error)
@@ -274,6 +296,9 @@ function M.expand_all(self, callback)
 			end
 			snapshot.expanded[id] = true
 			self:_snapshot_children(snapshot, id, captured, function(err, ids, invalidated)
+				if settled or retrying then
+					return
+				end
 				if not owns_snapshot() then
 					return finish(errors.stale())
 				end

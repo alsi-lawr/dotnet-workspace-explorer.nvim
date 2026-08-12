@@ -675,6 +675,172 @@ local function snapshot_page(parent_id, revision, nodes, next_token)
 	}
 end
 
+local function notify_workspace_change(tree, method)
+	if method == "workspace/delta" then
+		tree:_notification(method, reflected_delta({}))
+	else
+		tree:_notification(method, { workspaceId = "workspace-id", revision = 2 })
+	end
+end
+
+for _, method in ipairs({ "workspace/delta", "workspace/reset" }) do
+	local tree, client = harness()
+	tree.expanded = {}
+	local callback_count, callback_result = 0, nil
+	tree:expand_all(function(problem)
+		callback_count = callback_count + 1
+		callback_result = problem and problem.code or "success"
+	end)
+	local original_owner = tree.expansion_owner
+	local original_root = pending(client, "workspace/root")
+
+	notify_workspace_change(tree, method)
+	local superseded_reconcile = client.requests[#client.requests]
+	assert_equal(original_owner, tree.expansion_owner, method .. " retains the root-pending owner")
+	assert_equal(0, callback_count, method .. " leaves the root-pending callback unsettled")
+	notify_workspace_change(tree, method)
+	assert(
+		client.requests[#client.requests] == superseded_reconcile,
+		method .. " coalesces repeated root-pending retry registration"
+	)
+	local request_count, change_count = #client.requests, tree.changes
+	reply(client, original_root, nil, root_response(2))
+	assert_equal(request_count, #client.requests, method .. " makes the old root callback inert")
+	assert_equal(change_count, tree.changes, method .. " blocks old root callback renders")
+	assert_equal(0, callback_count, method .. " does not settle from the old root callback")
+
+	reply(client, superseded_reconcile, nil, root_response(2))
+	local current_reconcile = client.requests[#client.requests]
+	assert(
+		current_reconcile ~= superseded_reconcile,
+		method .. " restarts reconciliation after the repeated notification"
+	)
+	reply(client, current_reconcile, nil, root_response(2))
+	assert(
+		tree.expansion_owner ~= original_owner,
+		method .. " transfers the root-pending retry to a new owner"
+	)
+	local retried_root = client.requests[#client.requests]
+
+	reply(client, retried_root, nil, root_response(2))
+	reply(
+		client,
+		pending(client, "workspace/children", "workspace"),
+		nil,
+		empty_workspace_children(2)
+	)
+	assert_equal(1, callback_count, method .. " settles the root-pending retry exactly once")
+	assert_equal("success", callback_result, method .. " completes the root-pending retry")
+end
+
+for _, method in ipairs({ "workspace/delta", "workspace/reset" }) do
+	local tree, client = harness()
+	tree.expanded = {}
+	local callback_count, callback_result = 0, nil
+	tree:expand_all(function(problem)
+		callback_count = callback_count + 1
+		callback_result = problem and problem.code or "success"
+	end)
+	local original_owner = tree.expansion_owner
+	reply(client, pending(client, "workspace/root"), nil, root_response(1))
+	local original_child = pending(client, "workspace/children", "workspace")
+	assert(original_owner.overlay, method .. " child-pending owner has a visible overlay")
+
+	notify_workspace_change(tree, method)
+	local superseded_reconcile = client.requests[#client.requests]
+	assert_equal(original_owner, tree.expansion_owner, method .. " retains the child-pending owner")
+	assert_equal(nil, original_owner.overlay, method .. " invalidation clears the stale overlay")
+	assert_equal(0, callback_count, method .. " leaves the child-pending callback unsettled")
+	notify_workspace_change(tree, method)
+	assert(
+		client.requests[#client.requests] == superseded_reconcile,
+		method .. " coalesces repeated child-pending retry registration"
+	)
+	local request_count, change_count = #client.requests, tree.changes
+	reply(client, original_child, nil, empty_workspace_children(2))
+	assert_equal(request_count, #client.requests, method .. " makes the old child callback inert")
+	assert_equal(change_count, tree.changes, method .. " blocks old child callback renders")
+	assert_equal(0, callback_count, method .. " does not settle from the old child callback")
+
+	reply(client, superseded_reconcile, nil, root_response(2))
+	local current_reconcile = client.requests[#client.requests]
+	reply(client, current_reconcile, nil, root_response(2))
+	assert(
+		tree.expansion_owner ~= original_owner,
+		method .. " transfers the child-pending retry to a new owner"
+	)
+	local retried_root = client.requests[#client.requests]
+
+	reply(client, retried_root, nil, root_response(2))
+	reply(
+		client,
+		pending(client, "workspace/children", "workspace"),
+		nil,
+		empty_workspace_children(2)
+	)
+	assert_equal(1, callback_count, method .. " settles the child-pending retry exactly once")
+	assert_equal("success", callback_result, method .. " completes the child-pending retry")
+end
+
+for _, window_name in ipairs({ "root", "child" }) do
+	local tree, client = harness()
+	local expand_count, expand_result = 0, nil
+	tree:expand_all(function(problem)
+		expand_count = expand_count + 1
+		expand_result = problem and problem.code or "success"
+	end)
+	local original_root = pending(client, "workspace/root")
+	local original_owner = tree.expansion_owner
+	tree:_notification("workspace/delta", reflected_delta({}))
+	local reconcile_root = client.requests[#client.requests]
+	local reconcile_child
+	if window_name == "child" then
+		reply(client, reconcile_root, nil, root_response(2))
+		reconcile_child = pending(client, "workspace/children", "workspace")
+	end
+
+	local refresh_count, refresh_result = 0, nil
+	tree:refresh(function(problem)
+		refresh_count = refresh_count + 1
+		refresh_result = problem and problem.code or "success"
+	end)
+	local refresh_request = pending(client, "workspace/refresh")
+	assert_equal(nil, tree.expansion_owner, window_name .. " refresh preempts retry ownership")
+	assert_equal(1, expand_count, window_name .. " refresh settles Expand All once")
+	assert_equal("stale_tree", expand_result, window_name .. " refresh cancels Expand All")
+	assert(original_owner ~= tree.expansion_owner, window_name .. " refresh releases exact owner")
+
+	if window_name == "root" then
+		reply(client, reconcile_root, nil, root_response(2))
+	else
+		reply(client, reconcile_child, nil, empty_workspace_children(2))
+	end
+	assert_equal(false, tree.reconciling, window_name .. " owner loss stops stale reconciliation")
+	assert_equal({}, tree.reconcile_waiters, window_name .. " owner loss drains retry waiters")
+
+	reply(client, refresh_request, nil, { revision = 2, reset = true })
+	assert_equal(1, refresh_count, window_name .. " refresh settles once")
+	assert_equal("success", refresh_result, window_name .. " refresh succeeds")
+	local refresh_reconcile = client.requests[#client.requests]
+	assert_equal("workspace/root", refresh_reconcile.method, window_name .. " refresh reconciles")
+	reply(client, refresh_reconcile, nil, root_response(2))
+	reply(
+		client,
+		pending(client, "workspace/children", "workspace"),
+		nil,
+		empty_workspace_children(2)
+	)
+	assert_equal(false, tree.reconciling, window_name .. " refresh reconciliation completes")
+	assert_equal(false, tree.reconcile_queued, window_name .. " refresh leaves no queued reconcile")
+	assert_equal({}, tree.reconcile_waiters, window_name .. " refresh leaves no reconcile waiters")
+
+	local request_count, change_count = #client.requests, tree.changes
+	reply(client, original_root, nil, root_response(2))
+	assert_equal(request_count, #client.requests, window_name .. " old root remains inert")
+	assert_equal(change_count, tree.changes, window_name .. " old root cannot render")
+	assert_equal(1, expand_count, window_name .. " old root cannot resettle Expand All")
+end
+
 do
 	local tree, client = harness()
 	tree.marks = { project = true }
@@ -772,8 +938,9 @@ for _, lifecycle in ipairs({
 		end,
 	},
 	{
-		name = "reset",
+		name = "deferred reset",
 		invoke = function(tree)
+			tree.reconciliation_deferred = true
 			tree:_notification("workspace/reset", {})
 		end,
 	},

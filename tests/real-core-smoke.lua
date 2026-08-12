@@ -5,6 +5,7 @@ local core = assert(vim.env.DWE_CORE, "DWE_CORE is required")
 local fixture = assert(vim.env.DWE_FIXTURE, "DWE_FIXTURE is required")
 local fixture_root = vim.fs.dirname(fixture)
 local explorer = require("dotnet-workspace-explorer")
+local context = require("dotnet-workspace-explorer.controller.context")
 local view = require("dotnet-workspace-explorer.ui.view")
 local notification, desired_create_kind, desired_display_name, desired_name, confirmation_result
 
@@ -25,6 +26,18 @@ end
 
 local function lines()
 	return vim.api.nvim_buf_get_lines(view.buf, 0, -1, false)
+end
+
+local function expand_all_complete()
+	if not context.tree or context.tree.expansion_owner then
+		return false
+	end
+	for _, row in ipairs(view.rows) do
+		if row.loading or row.provisional or row.actionable == false then
+			return false
+		end
+	end
+	return true
 end
 
 local function file_contents(path)
@@ -120,7 +133,7 @@ local function move_logical(source, destination, description)
 	assert_equal(nil, notification, description .. " reported an error")
 	explorer.expand_all()
 	wait_for(function()
-		return nested_under(destination, source)
+		return nested_under(destination, source) and expand_all_complete()
 	end, description .. " did not reconcile beneath its destination")
 end
 
@@ -179,13 +192,18 @@ end, "real core did not open")
 
 explorer.expand_all()
 wait_for(function()
+	local hydrated = false
 	for _, line in ipairs(lines()) do
 		if line:find("Version:", 1, true) then
-			return true
+			hydrated = true
+			break
 		end
 	end
-	return false
-end, "ExpandAll did not hydrate dependency properties")
+	if not hydrated then
+		return false
+	end
+	return expand_all_complete()
+end, "ExpandAll did not finish hydrating dependency properties")
 assert(not lines()[1]:find("◌", 1, true), "ignored descendants decorated the solution")
 
 select_matching("S SemanticStudio")
@@ -496,7 +514,9 @@ wait_for(function()
 end, "deleted node did not reconcile")
 
 explorer.collapse_all()
-assert(#lines() == 1, "CollapseAll did not show one collapsed tree")
+wait_for(function()
+	return #lines() == 1
+end, "CollapseAll did not show one collapsed tree")
 explorer.git_refresh()
 wait_for(function()
 	return lines()[1]:find("★", 1, true) ~= nil or lines()[1]:find("✗", 1, true) ~= nil

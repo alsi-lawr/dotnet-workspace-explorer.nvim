@@ -69,6 +69,7 @@
 ---@field epoch integer
 ---@field workspace string
 ---@field owner? DweExpansionOwner
+---@field owner_loss_invalidates? boolean
 
 ---@class DweWorkspaceSnapshot
 ---@field nodes table<DweNodeId, DweNode>
@@ -102,6 +103,7 @@
 ---@field kind "whole_tree"
 ---@field token integer
 ---@field cancel? fun(problem: DweProblem)
+---@field retry? fun()
 ---@field overlay? DweWorkspaceSnapshot
 
 ---@class DwePresentationMetadata

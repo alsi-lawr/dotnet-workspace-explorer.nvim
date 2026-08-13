@@ -144,6 +144,10 @@ function M.activate()
 	end
 end
 
+---Double-clicking a node does what activating it does: expand or collapse a container, open a
+---file. Bound as its own action so it can be rebound or disabled without giving up <CR>.
+M.double_click = M.activate
+
 ---Opens the selected project's project file.
 function M.edit()
 	local id = context.tree and view.selected(context.tree)

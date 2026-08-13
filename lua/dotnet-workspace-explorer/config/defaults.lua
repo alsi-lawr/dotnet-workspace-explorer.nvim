@@ -27,6 +27,7 @@ function M.create()
 		},
 		mappings = {
 			activate = "<CR>",
+			double_click = "<2-LeftMouse>",
 			collapse = "h",
 			collapse_all = "W",
 			edit = "e",

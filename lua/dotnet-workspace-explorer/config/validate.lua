@@ -6,6 +6,7 @@ local mapping_names = {
 	collapse = true,
 	collapse_all = true,
 	delete = true,
+	double_click = true,
 	edit = true,
 	expand = true,
 	expand_all = true,
